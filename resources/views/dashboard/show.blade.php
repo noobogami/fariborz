@@ -472,8 +472,11 @@ function jobDetail() {
         err:  { nodeBg:'rgba(137,2,62,.28)', nodeBd:'rgba(255,179,196,.4)', nodeFg:'#ffb3c4', nodeGlow:'none',
                 cardBg:'linear-gradient(90deg,rgba(137,2,62,.16),#1a1f21)', cardBd:'rgba(137,2,62,.45)', toolFg:'#ffb3c4',
                 chipBg:'rgba(137,2,62,.28)', chipFg:'#ffb3c4', chipBd:'rgba(137,2,62,.5)', anim:'none' },
+        input:{ nodeBg:'linear-gradient(145deg,rgba(234,99,140,.22),rgba(137,2,62,.3))', nodeBd:'rgba(255,217,218,.4)', nodeFg:'#ffd9da', nodeGlow:'0 0 16px rgba(234,99,140,.28)',
+                cardBg:'linear-gradient(90deg,rgba(234,99,140,.1),#1a1f21)', cardBd:'rgba(234,99,140,.3)', toolFg:'#ffb3c4',
+                chipBg:'rgba(234,99,140,.16)', chipFg:'#ffd9da', chipBd:'rgba(234,99,140,.4)', anim:'none' },
     };
-    const STATUS = { live:'RUNNING', err:'ERROR', warn:'WAIT', think:'THINK', ok:'OK' };
+    const STATUS = { live:'RUNNING', err:'ERROR', warn:'WAIT', think:'THINK', ok:'OK', input:'PROMPT' };
     // task status → tone + label
     const TASK_TONE = {
         pending:         { tone: Object.assign({}, TONES.think, { nodeBg:'#20262a', nodeBd:'rgba(255,255,255,.1)', nodeFg:'#8a9499', chipBg:'rgba(255,255,255,.05)', chipFg:'#9aa8ac', chipBd:'rgba(255,255,255,.11)', titleFg:'#98a2a7', row:'transparent' }), label:'PENDING' },
@@ -682,13 +685,35 @@ function jobDetail() {
             return '🔧';
         },
         get simpleSteps() {
-            const groups = {};
-            for (const e of this.timeline) (groups[e.iteration] ||= []).push(e);
-            const iters = Object.keys(groups).map(Number).sort((a, b) => b - a);
-            const lastIter = this.timeline.length ? this.timeline[this.timeline.length - 1].iteration : null;
-            const isLive = !['completed','failed','cancelled'].includes(this.job.status);
             const after = (s, re) => { const m = (s || '').match(re); return m ? m[1].trim() : ''; };
-            return iters.map(iter => {
+            const isLive = !['completed','failed','cancelled'].includes(this.job.status);
+            const lastSeq = this.timeline.length ? Math.max(...this.timeline.map(e => e.seq || 0)) : 0;
+
+            // The prompts the HUMAN gave — the starting goal (job_started) and every
+            // follow-up guidance (resumed) — are shown as their OWN nodes so you can
+            // see exactly what was asked, and when. They're pulled out of the normal
+            // iteration grouping below.
+            const inputs = this.timeline
+                .filter(e => e.type === 'job_started' || e.type === 'resumed')
+                .map(e => {
+                    const isStart = e.type === 'job_started';
+                    const text = isStart
+                        ? (after(e.summary, /goal:\s*([\s\S]*)$/i) || this.job.goal || e.summary)
+                        : (after(e.summary, /guidance:\s*([\s\S]*)$/i) || e.summary);
+                    return { id: e.id, iteration: e.iteration, glyph: '📝',
+                             tool: isStart ? 'prompt' : 'new guidance', outcome: text,
+                             summary: text, status: STATUS['input'], dur: '', tone: TONES['input'],
+                             _key: 'input', isTool: false, seq: e.seq || 0 };
+                });
+
+            // One collapsed step per iteration (the agent's action), excluding the
+            // prompt events which are their own nodes above.
+            const groups = {};
+            for (const e of this.timeline) {
+                if (e.type === 'job_started' || e.type === 'resumed') continue;
+                (groups[e.iteration] ||= []).push(e);
+            }
+            const iterSteps = Object.keys(groups).map(Number).map(iter => {
                 const evs = groups[iter];
                 const by = t => evs.find(e => e.type === t);
                 let key = 'ok', glyph = '•', tool = 'step', outcome = '', isTool = false, primary = evs[evs.length - 1];
@@ -696,7 +721,7 @@ function jobDetail() {
                       asked = by('human_question_asked'), queued = by('human_question_queued'),
                       answered = by('human_answer_received'), guard = by('guardrail_triggered'),
                       invalid = by('invalid_llm_response'), failed = by('tool_failed') || by('failed'),
-                      started = by('job_started'), thought = by('thought');
+                      thought = by('thought');
                 if (finished) { key='ok'; glyph='✅'; tool='finished'; outcome = after(finished.summary, /\((.*)\)/) || 'answer ready'; primary=finished; }
                 else if (toolSel) {
                     isTool = true;
@@ -711,11 +736,14 @@ function jobDetail() {
                 else if (guard) { key='warn'; glyph='🛑'; tool='guardrail'; outcome = guard.summary.slice(0,120); primary=guard; }
                 else if (invalid) { key='warn'; glyph='⚠'; tool='invalid reply'; outcome = invalid.summary.slice(0,120); primary=invalid; }
                 else if (thought) { key='think'; glyph='🧠'; tool='thinking'; outcome = thought.summary.slice(0,130); primary=thought; }
-                else if (started) { key='ok'; glyph='▶'; tool='started'; outcome='job started'; primary=started; }
-                if (isLive && iter === lastIter && key !== 'err') key = 'live';
+                const seq = Math.max(...evs.map(e => e.seq || 0));
+                if (isLive && seq === lastSeq && key !== 'err') key = 'live';
                 return { id: primary.id, iteration: iter, glyph, tool, outcome, summary: outcome || primary.summary || '',
-                         status: STATUS[key], dur: this.fmtDur(primary.duration_ms), tone: TONES[key], _key: key, isTool };
+                         status: STATUS[key], dur: this.fmtDur(primary.duration_ms), tone: TONES[key], _key: key, isTool, seq };
             });
+
+            // Merge and show newest-first (by event order).
+            return [...inputs, ...iterSteps].sort((a, b) => (b.seq || 0) - (a.seq || 0));
         },
         toolLabel(e) {
             const m = (e.summary || '').match(/(?:Chose|Running|Observation from|tool)\s+([a-z_.]+)/i);
