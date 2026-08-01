@@ -30,6 +30,7 @@ class ResearchTask extends Model
     protected $casts = [
         'status' => TaskStatus::class,
         'depends_on' => 'array',
+        'outputs' => 'array',
     ];
 
     /** True if every task this one depends on is in the given set of Done seqs. */

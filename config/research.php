@@ -32,6 +32,11 @@ return [
     | so a long project runs to a finished deliverable rather than stalling.
     */
     'supervisor' => [
+        // Before planning, a supervisor spends ONE bounded LLM turn extracting the
+        // user's real spec (constraints, ordering, deliverable) from the raw goal,
+        // so the plan honors "deploy the UI first" / "spawn 100 agents" instead of
+        // the weak model re-guessing intent every turn. Disable to plan immediately.
+        'comprehension' => env('RESEARCH_SUPERVISOR_COMPREHENSION', true),
         'worker_max_iterations' => env('RESEARCH_WORKER_MAX_ITERATIONS', 20),
         'worker_max_tool_calls' => env('RESEARCH_WORKER_MAX_TOOL_CALLS', 25),
         // Each time the supervisor needs more room, top up its budget by this much.

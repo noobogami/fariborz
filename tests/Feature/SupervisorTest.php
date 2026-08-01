@@ -209,6 +209,7 @@ class SupervisorTest extends TestCase
     public function test_supervisor_advance_plans_then_delegates_without_rescheduling_itself(): void
     {
         Queue::fake();
+        config()->set('research.supervisor.comprehension', false); // isolate plan→delegate mechanics
         $this->app->instance(LlmClient::class, new FakeLlmClient([
             ['thought' => 'plan', 'action' => 'tool', 'tool' => 'plan_tasks', 'arguments' => ['tasks' => [['title' => 'T1', 'brief' => 'do t1']]]],
             ['thought' => 'delegate', 'action' => 'tool', 'tool' => 'delegate_task', 'arguments' => ['task' => 1]],
@@ -267,10 +268,12 @@ class SupervisorTest extends TestCase
 
         $worker = app(StartResearch::class)->spawnWorker($sup, $task, 'do T');
 
-        // The worker builds in the SUPERVISOR's workspace, not its own.
+        // The worker builds in the SUPERVISOR's workspace, not its own — keyed by
+        // the root's human-readable slug so the sandbox folder is findable.
         $this->assertSame($sup->id, $worker->root_job_id);
+        $this->assertSame($sup->slug, $worker->workspace_slug);
         $ctx = new ResearchContext($worker->refresh(), 0, 'do T', [], [], [], role: JobRole::Worker);
-        $this->assertSame($sup->id, $ctx->workspaceId());
+        $this->assertSame($sup->slug, $ctx->workspaceId());
     }
 
     public function test_delegating_project_mode_spawns_a_sub_supervisor(): void
@@ -318,6 +321,78 @@ class SupervisorTest extends TestCase
         $this->assertSame(TaskStatus::AwaitingReview, $task->refresh()->status);
         $this->assertStringContainsString('SUB RESULT', $task->result);
         Queue::assertPushed(AdvanceResearchJob::class, fn ($j) => $j->jobId === $root->id);
+    }
+
+    public function test_supervisor_understands_the_goal_before_planning(): void
+    {
+        Queue::fake();
+        config()->set('research.supervisor.comprehension', true);
+        // First LLM turn is the comprehension call (intake analyst), NOT a decision.
+        $this->app->instance(LlmClient::class, new FakeLlmClient([
+            json_encode([
+                'restatement' => 'Deploy a switchable-scenario UI first, then fill it in.',
+                'constraints' => ['Spawn at least 100 sub-agents/tasks (counts AGENTS, not scenarios)'],
+                'ordering' => ['Deploy the UI FIRST, before generating scenarios'],
+                'deliverable' => 'A served web app with switchable scenarios',
+                'acceptance' => ['UI reachable at a published port'],
+            ]),
+        ]));
+
+        $job = app(StartResearch::class)->handle('deploy ui first; wont accept less than 100 agents', [], JobRole::Supervisor);
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $job->refresh();
+        $this->assertNotEmpty($job->requirements, 'the goal spec is extracted and stored before any planning');
+        $this->assertContains('Deploy the UI FIRST, before generating scenarios', $job->requirements['ordering']);
+        $this->assertStringContainsString('AGENTS', $job->requirements['constraints'][0]);
+        // No task was planned this turn — comprehension ran, then rescheduled.
+        $this->assertSame(0, ResearchTask::where('research_job_id', $job->id)->count());
+        Queue::assertPushed(AdvanceResearchJob::class, fn ($j) => $j->jobId === $job->id);
+    }
+
+    public function test_comprehension_stores_a_fallback_when_the_model_reply_is_unparseable(): void
+    {
+        Queue::fake();
+        config()->set('research.supervisor.comprehension', true);
+        $this->app->instance(LlmClient::class, new FakeLlmClient(['not json at all']));
+
+        $job = app(StartResearch::class)->handle('some goal', [], JobRole::Supervisor);
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $job->refresh();
+        // A non-null, well-shaped spec so comprehension never loops.
+        $this->assertNotEmpty($job->requirements);
+        $this->assertSame('some goal', $job->requirements['restatement']);
+        $this->assertSame([], $job->requirements['ordering']);
+    }
+
+    public function test_worker_brief_carries_dependency_outputs_and_forbids_redoing_work(): void
+    {
+        Queue::fake();
+        config()->set('research.supervisor.comprehension', false);
+        $job = $this->supervisor('Research remote work, then combine into notes.md');
+        $job->update(['requirements' => ['constraints' => ['Keep it small'], 'ordering' => [], 'acceptance' => []]]);
+
+        // #1 is DONE and produced a file + a result; #2 combines it and is ready.
+        ResearchTask::create([
+            'research_job_id' => $job->id, 'seq' => 1, 'title' => 'Research Pros', 'brief' => 'find pros',
+            'status' => TaskStatus::Done, 'outputs' => ['pros.md'], 'result' => 'PROS: flexibility, less commuting, focus',
+        ]);
+        ResearchTask::create([
+            'research_job_id' => $job->id, 'seq' => 2, 'title' => 'Combine', 'brief' => 'combine into notes.md',
+            'status' => TaskStatus::Pending, 'depends_on' => [1], 'outputs' => ['notes.md'],
+        ]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $worker = ResearchJob::where('parent_job_id', $job->id)->first();
+        $this->assertNotNull($worker, 'the ready combine task was delegated');
+        $this->assertStringContainsString('INPUTS ALREADY PRODUCED', $worker->goal);
+        $this->assertStringContainsString('PROS: flexibility', $worker->goal, 'the dependency result is handed over');
+        $this->assertStringContainsString('pros.md', $worker->goal, 'the dependency output file is named');
+        $this->assertStringContainsString('notes.md', $worker->goal, 'the write target is named');
+        $this->assertStringContainsString('Do NOT search', $worker->goal, 'it is told not to redo research');
+        $this->assertStringContainsString('Keep it small', $worker->goal, 'project constraints reach the worker');
     }
 
     public function test_parked_supervisor_shows_waiting_not_stalled(): void

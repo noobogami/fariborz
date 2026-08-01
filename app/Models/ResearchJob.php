@@ -14,6 +14,7 @@ use Illuminate\Support\Collection;
 /**
  * @property string $id
  * @property string $goal
+ * @property array|null $requirements
  * @property JobStatus $status
  * @property array $config
  * @property int $iteration

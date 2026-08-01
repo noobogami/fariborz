@@ -328,10 +328,12 @@ class PromptBuilder
 
         $readyNote = empty($ready) ? 'none right now' : implode(', ', array_map(fn ($s) => "#$s", $ready));
 
+        $requirements = $this->requirementsBlock($ctx);
+
         return <<<PROMPT
         THE GOAL (never lose sight of this):
         "{$ctx->goal}"
-
+        {$requirements}
         YOUR TASK LIST — {$summary}:
         {$plan}
 
@@ -340,12 +342,52 @@ class PromptBuilder
         Decide the single next action (in this priority):
         - If a task is ★ REVIEW: read_file / list_files its output to VERIFY it, then review_task
           (accept only if the file is genuinely correct; else revise with specific notes).
-        - Else if there is no plan yet (or the goal needs more tasks): plan_tasks.
+        - Else if there is no plan yet (or the goal needs more tasks): plan_tasks. Your plan MUST
+          honor the REQUIREMENTS above — respect the CONSTRAINTS (e.g. a floor on how many tasks
+          to spawn is about tasks, not content) and put ORDERING steps first (if the user wants
+          the UI deployed first, that task runs early with empty deps, never last).
         - Else if every task is ✔ DONE: finish — assemble the accepted results into the final
           deliverable itself (not a description of it).
         - Else there is nothing to do right now (workers are running) — you'll be re-woken.
         Respond with JSON only.
         PROMPT;
+    }
+
+    /**
+     * The extracted, authoritative spec re-anchored every supervisor turn. This is
+     * what stops the weak model re-deriving the user's intent (differently) each
+     * turn — the constraints and ordering are pinned, not re-guessed from the raw
+     * goal. Empty (no block) until the comprehension step has run.
+     */
+    private function requirementsBlock(ResearchContext $ctx): string
+    {
+        $req = $ctx->job->requirements ?? [];
+        if (empty($req)) {
+            return '';
+        }
+
+        $list = function (array $items): string {
+            return implode("\n", array_map(fn ($i) => "  - {$i}", $items));
+        };
+
+        $out = "\nUSER REQUIREMENTS (extracted from the goal — authoritative; honor these exactly):";
+        if (! empty($req['restatement'])) {
+            $out .= "\n  What they want: {$req['restatement']}";
+        }
+        if (! empty($req['constraints'])) {
+            $out .= "\n  Hard constraints:\n".$list($req['constraints']);
+        }
+        if (! empty($req['ordering'])) {
+            $out .= "\n  Required ordering (plan tasks in THIS order):\n".$list($req['ordering']);
+        }
+        if (! empty($req['deliverable'])) {
+            $out .= "\n  Final deliverable: {$req['deliverable']}";
+        }
+        if (! empty($req['acceptance'])) {
+            $out .= "\n  Done when:\n".$list($req['acceptance']);
+        }
+
+        return $out."\n";
     }
 
     public function bestEffort(string $reason): string

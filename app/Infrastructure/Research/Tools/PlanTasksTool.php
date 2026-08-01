@@ -23,11 +23,15 @@ class PlanTasksTool implements ControlTool
     public function description(): string
     {
         return 'Break the GOAL into a list of concrete, doable tasks. Each needs a title, a '
-            .'"brief" (what to do + what "done" looks like), and "depends_on": the task numbers '
-            .'that must be FINISHED & VERIFIED before it can start. Use deps to model order — '
+            .'"brief" (what to do + what "done" looks like), "depends_on": the task numbers '
+            .'that must be FINISHED & VERIFIED before it can start, and "outputs": the file '
+            .'path(s) the task WRITES into the shared workspace. Use deps to model order — '
             .'e.g. chapter 2 depends_on [1]. Leave depends_on EMPTY [] for independent tasks '
             .'that can run in parallel (e.g. a web server that does not need the chapters). If '
-            .'you omit depends_on it defaults to the previous task. Call again to append tasks.';
+            .'you omit depends_on it defaults to the previous task. HONOR THE ORDERING the user '
+            .'demanded: if they said deploy the UI first, that task must run early (empty deps), '
+            .'not last. Declare "outputs" so a later task knows exactly which files to read. '
+            .'Call again to append tasks.';
     }
 
     public function schema(): array
@@ -47,6 +51,11 @@ class PlanTasksTool implements ControlTool
                                 'type' => 'array',
                                 'items' => ['type' => 'integer'],
                                 'description' => 'Task numbers that must be Done first. [] = independent (runs in parallel). Omit = the previous task.',
+                            ],
+                            'outputs' => [
+                                'type' => 'array',
+                                'items' => ['type' => 'string'],
+                                'description' => 'File path(s) this task writes into the shared workspace (e.g. ["notes.md"]). A dependent task is told to read these.',
                             ],
                         ],
                         'required' => ['title', 'brief'],
@@ -82,12 +91,18 @@ class PlanTasksTool implements ControlTool
                 : ($prev >= 1 ? [$prev] : []);
             $deps = array_values(array_filter($deps, fn ($d) => $d >= 1 && $d < $seq));
 
+            $outputs = array_values(array_filter(
+                array_map(fn ($p) => trim((string) $p), (array) ($t['outputs'] ?? [])),
+                fn ($p) => $p !== ''
+            ));
+
             ResearchTask::create([
                 'research_job_id' => $jobId,
                 'seq' => $seq,
                 'title' => $title,
                 'brief' => $brief,
                 'depends_on' => $deps,
+                'outputs' => $outputs ?: null,
             ]);
             $added[] = "#{$seq} {$title}".($deps ? ' (needs '.implode(',', array_map(fn ($d) => "#$d", $deps)).')' : ' (independent)');
         }
@@ -98,7 +113,8 @@ class PlanTasksTool implements ControlTool
 
         return ToolResult::ok(
             'Added '.count($added).' task(s) to the plan:'."\n".implode("\n", $added)."\n\n"
-            .'Now delegate_task the first pending one.',
+            .'Delegation is automatic — every ready task (its deps Done) is started for you. '
+            .'Your job now is to review each finished task and finish when all are Done.',
             ['added' => $added]
         );
     }

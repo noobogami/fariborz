@@ -4,6 +4,7 @@ namespace App\Application\Research;
 
 use App\Application\Research\Guardrails\GuardrailPipeline;
 use App\Application\Research\Human\HumanAvailabilityService;
+use App\Application\Research\Planner\GoalComprehension;
 use App\Application\Research\Planner\InvalidDecisionException;
 use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Research\Tools\ToolRunner;
@@ -24,6 +25,8 @@ use App\Events\ResearchCompleted;
 use App\Events\ResearchFailed;
 use App\Jobs\AdvanceResearchJob;
 use App\Models\ResearchJob;
+use App\Models\ResearchTask;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
@@ -49,6 +52,7 @@ class ResearchOrchestrator
         private HumanAvailabilityService $humans,
         private TraceRecorder $trace,
         private StartResearch $start,
+        private GoalComprehension $comprehension,
     ) {}
 
     public function advance(string $jobId): void
@@ -66,6 +70,18 @@ class ResearchOrchestrator
         // 1. Preflight guardrails can STOP the whole job (limit/timeout/cancel).
         if ($stop = $this->guardrails->preflight($context)) {
             $this->finalizeByGuardrail($job, $stop);
+
+            return;
+        }
+
+        // 1a2. UNDERSTAND before planning. A supervisor spends ONE bounded turn
+        //      extracting the user's real spec (constraints, ordering, deliverable)
+        //      from the raw goal, so the plan honors it instead of the weak model
+        //      re-guessing intent — differently — every turn. Runs once (before any
+        //      task exists), then reschedules so the next turn plans WITH the spec.
+        if ($this->needsComprehension($job)) {
+            $this->comprehension->analyze($job);
+            $this->reschedule($job);
 
             return;
         }
@@ -227,6 +243,15 @@ class ResearchOrchestrator
         };
     }
 
+    /** Whether this supervisor still owes a one-time goal-comprehension pass. */
+    private function needsComprehension(ResearchJob $job): bool
+    {
+        return $job->isSupervisor()
+            && config('research.supervisor.comprehension', true)
+            && empty($job->requirements)
+            && $job->tasks()->count() === 0;
+    }
+
     /**
      * Deterministic delegation: spawn a worker for EVERY ready pending task (deps
      * all Done). The orchestrator does this — not the model — so ready tasks always
@@ -244,12 +269,7 @@ class ResearchOrchestrator
                 continue;
             }
 
-            $goal = "TASK — your single objective:\n{$task->title}\n{$task->brief}\n\n"
-                ."This is ONE part of a larger project. The overall project goal is:\n\"{$job->goal}\"\n\n"
-                .'You SHARE the project workspace with the other sub-agents — read what they wrote '
-                ."(list_files / read_file) and write your output into the file path(s) the task names.\n"
-                .'Do ONLY this task. Finish with a report that IS the deliverable (the actual '
-                .'content / result / answer), not a description of it.';
+            $goal = $this->buildWorkerGoal($job, $task, $tasks);
 
             $worker = $this->start->spawnWorker($job, $task, $goal);
             $task->update([
@@ -264,6 +284,84 @@ class ResearchOrchestrator
         }
 
         return $spawned;
+    }
+
+    /**
+     * Compose a worker's goal for ONE task. Beyond the task itself, this hands the
+     * worker two things earlier versions omitted — the reasons a "combine" worker
+     * re-did research from scratch instead of using it:
+     *
+     *  - The project's extracted REQUIREMENTS (constraints/ordering), so the worker
+     *    honors the same spec the supervisor planned against.
+     *  - Its dependencies' ACTUAL OUTPUTS: each finished input task's declared file
+     *    path(s) AND its result text, with a hard "these are DONE — use them, do NOT
+     *    redo their work" directive. So an assembly/combine task reads its inputs
+     *    instead of researching afresh.
+     *
+     * @param  Collection<int,ResearchTask>  $tasks  all of the supervisor's tasks
+     */
+    private function buildWorkerGoal(ResearchJob $job, ResearchTask $task, $tasks): string
+    {
+        $out = "TASK — your single objective:\n{$task->title}\n{$task->brief}\n";
+
+        $writes = array_values(array_filter((array) ($task->outputs ?? [])));
+        if ($writes) {
+            $out .= "\nWRITE your deliverable to this exact path in the shared workspace: "
+                .implode(', ', $writes).' (use write_file).';
+        }
+
+        if ($req = $this->requirementsBrief($job)) {
+            $out .= "\n\n{$req}";
+        }
+
+        // Hand over each dependency's real output so the worker builds ON it.
+        $deps = array_values(array_filter((array) ($task->depends_on ?? [])));
+        $inputs = [];
+        foreach ($deps as $depSeq) {
+            $dep = $tasks->firstWhere('seq', (int) $depSeq);
+            if (! $dep) {
+                continue;
+            }
+            $paths = array_values(array_filter((array) ($dep->outputs ?? [])));
+            $head = "• Task #{$dep->seq} \"{$dep->title}\"".($paths ? ' → wrote: '.implode(', ', $paths) : '');
+            $result = trim((string) $dep->result);
+            if ($result !== '') {
+                $head .= "\n  Its result:\n  ".str_replace("\n", "\n  ", mb_strimwidth($result, 0, 4000, '…'));
+            }
+            $inputs[] = $head;
+        }
+
+        if ($inputs) {
+            $out .= "\n\nINPUTS ALREADY PRODUCED — these dependency tasks are DONE. Their output is "
+                .'below and their files are in your shared workspace (list_files / read_file to open '
+                .'them). USE this material — combine, assemble, or build on it. Do NOT search the web '
+                ."or redo research/work that is already provided here:\n".implode("\n", $inputs);
+        }
+
+        $out .= "\n\nThis is ONE part of a larger project. The overall project goal is:\n\"{$job->goal}\"\n\n"
+            .'You SHARE the workspace with the other sub-agents. Do ONLY this task. Finish with a '
+            .'report that IS the deliverable (the actual content / result / answer), not a description of it.';
+
+        return $out;
+    }
+
+    /** A compact, worker-facing view of the project's extracted requirements. */
+    private function requirementsBrief(ResearchJob $job): string
+    {
+        $req = $job->requirements ?? [];
+        if (empty($req)) {
+            return '';
+        }
+
+        $lines = [];
+        foreach ((array) ($req['constraints'] ?? []) as $c) {
+            $lines[] = "- {$c}";
+        }
+        if (empty($lines)) {
+            return '';
+        }
+
+        return "PROJECT CONSTRAINTS you must respect:\n".implode("\n", $lines);
     }
 
     private function bumpStall(ResearchJob $job): int
