@@ -110,6 +110,20 @@ class SettingsService
         return $values;
     }
 
+    /** Config paths that currently have a stored override (vs. .env/default). */
+    public function overriddenKeys(): array
+    {
+        try {
+            if (! Schema::hasTable('settings')) {
+                return [];
+            }
+
+            return Setting::pluck('config_key')->all();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
     /** Persist submitted settings. $input is keyed by config path. */
     public function save(array $input): void
     {

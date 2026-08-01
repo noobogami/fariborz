@@ -42,15 +42,51 @@ class SupervisorTest extends TestCase
 
         $sup = collect($reg->definitions(null, JobRole::Supervisor))->pluck('name');
         $this->assertContains('plan_tasks', $sup);
-        $this->assertContains('delegate_task', $sup);
         $this->assertContains('review_task', $sup);
-        $this->assertNotContains('browser_search', $sup);   // supervisor doesn't do the work
+        $this->assertNotContains('delegate_task', $sup); // delegation is deterministic (orchestrator), not a model choice
+        $this->assertNotContains('browser_search', $sup); // supervisor doesn't do the work
         $this->assertNotContains('write_file', $sup);
 
         $worker = collect($reg->definitions(null, JobRole::Worker))->pluck('name');
         $this->assertContains('browser_search', $worker);
         $this->assertNotContains('delegate_task', $worker);  // workers can't delegate
         $this->assertNotContains('plan_tasks', $worker);
+    }
+
+    public function test_orchestrator_auto_delegates_ready_tasks_without_the_model(): void
+    {
+        Queue::fake();
+        // No LLM decision needed — the orchestrator delegates deterministically.
+        $this->app->instance(LlmClient::class, new FakeLlmClient([['action' => 'finish', 'report' => 'x', 'confidence' => 1]]));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'A', 'brief' => 'b', 'status' => TaskStatus::Pending, 'depends_on' => []]);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 2, 'title' => 'B (blocked)', 'brief' => 'b', 'status' => TaskStatus::Pending, 'depends_on' => [1]]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        // #1 (ready) auto-started; #2 (dep unmet) stays pending; supervisor parked.
+        $this->assertSame(TaskStatus::InProgress, ResearchTask::where('research_job_id', $job->id)->where('seq', 1)->first()->status);
+        $this->assertSame(TaskStatus::Pending, ResearchTask::where('research_job_id', $job->id)->where('seq', 2)->first()->status);
+        $this->assertSame('awaiting_worker', $job->refresh()->current_activity);
+        $this->assertSame(1, ResearchJob::where('parent_job_id', $job->id)->count());
+    }
+
+    public function test_stall_breaker_stops_a_blocked_loop(): void
+    {
+        config()->set('research.limits.max_stalls', 3);
+        // The model fixates on ONE calculator call: it succeeds once, then every
+        // identical repeat is blocked as a duplicate — the classic thrash. The
+        // stall breaker must stop the job instead of looping forever.
+        $this->app->instance(LlmClient::class, new FakeLlmClient([
+            ['action' => 'tool', 'tool' => 'calculator', 'arguments' => ['expression' => '1+1']],
+        ]));
+
+        $job = app(StartResearch::class)->handle('compute stuff');
+
+        $job = ResearchJob::find($job->id);
+        $this->assertTrue($job->status->isTerminal(), 'a blocked-action loop must terminate, not hang');
+        $this->assertGreaterThanOrEqual(3, $job->iteration, 'blocked actions still advance the iteration');
     }
 
     public function test_plan_then_delegate_creates_a_worker_and_parks_the_supervisor(): void

@@ -27,8 +27,41 @@ class DecisionParser
         return match ($json['action']) {
             'finish' => $this->parseFinish($json),
             'tool' => $this->parseTool($json, $registry),
-            default => throw new InvalidDecisionException("Unknown action \"{$json['action']}\". Must be \"tool\" or \"finish\"."),
+            default => $this->parseLenient($json, $registry),
         };
+    }
+
+    /**
+     * Weak models frequently collapse {"action":"tool","tool":"X"} into
+     * {"action":"X"} — naming the tool directly as the action. Rather than
+     * burning an iteration on a corrective observation, if the action names a
+     * real tool, treat it as that tool call.
+     */
+    private function parseLenient(array $json, ToolRegistry $registry): Decision
+    {
+        $action = $json['action'];
+
+        if (is_string($action) && $registry->has($action)) {
+            $json['tool'] = $action;
+
+            // Some models also drop the args at the top level instead of under
+            // "arguments" (e.g. {"action":"write_file","path":...,"content":...}).
+            if (! isset($json['arguments']) || ! is_array($json['arguments'])) {
+                $json['arguments'] = $this->salvageArguments($json);
+            }
+
+            return $this->parseTool($json, $registry);
+        }
+
+        throw new InvalidDecisionException("Unknown action \"{$action}\". Must be \"tool\" or \"finish\".");
+    }
+
+    /** Gather stray top-level keys as tool arguments, minus the contract's own keys. */
+    private function salvageArguments(array $json): array
+    {
+        unset($json['thought'], $json['action'], $json['tool'], $json['arguments'], $json['report'], $json['confidence']);
+
+        return $json;
     }
 
     private function parseFinish(array $json): FinishDecision

@@ -54,16 +54,19 @@ class ToolRegistry
     {
         $tools = $allow ? array_intersect_key($this->tools, array_flip($allow)) : $this->tools;
 
-        // A supervisor delegates the WORK, but must be able to VERIFY it — so it
-        // also gets read-only inspection tools to open what workers produced in the
-        // shared workspace before it accepts a task. It still cannot write/run.
+        // A supervisor's job is bounded: PLAN the tasks, REVIEW what workers produce,
+        // and FINISH. The orchestrator does the delegating deterministically, so the
+        // model never even sees delegate_task — that free choice is what made a weak
+        // model thrash. It also gets read-only tools to VERIFY artifacts before it
+        // accepts them. It still cannot write or run code.
         $supervisorExtras = ['ask_human', 'read_file', 'list_files', 'container_logs', 'list_processes'];
+        $supervisorHidden = ['delegate_task'];
 
-        $tools = array_filter($tools, function (Tool $t) use ($role, $supervisorExtras) {
+        $tools = array_filter($tools, function (Tool $t) use ($role, $supervisorExtras, $supervisorHidden) {
             $isControl = $t instanceof ControlTool;
 
             return $role === JobRole::Supervisor
-                ? ($isControl || in_array($t->name(), $supervisorExtras, true))
+                ? (($isControl || in_array($t->name(), $supervisorExtras, true)) && ! in_array($t->name(), $supervisorHidden, true))
                 : ! $isControl;
         });
 

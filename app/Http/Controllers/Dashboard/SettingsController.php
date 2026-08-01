@@ -15,6 +15,7 @@ class SettingsController extends Controller
         return view('dashboard.settings', [
             'schema' => $this->settings->schema(),
             'values' => $this->settings->currentValues(),
+            'overridden' => $this->settings->overriddenKeys(),
         ]);
     }
 

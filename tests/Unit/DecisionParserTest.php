@@ -39,6 +39,31 @@ class DecisionParserTest extends TestCase
         $this->assertSame(0.9, $decision->confidence);
     }
 
+    public function test_recovers_when_action_names_a_tool_directly(): void
+    {
+        // Weak models collapse {"action":"tool","tool":"calculator"} into
+        // {"action":"calculator"} — the parser should route it, not reject it.
+        $raw = '{"thought":"do math","action":"calculator","arguments":{"expression":"2+2"}}';
+
+        $decision = (new DecisionParser)->parse($raw, $this->registry());
+
+        $this->assertInstanceOf(ToolCall::class, $decision);
+        $this->assertSame('calculator', $decision->tool);
+        $this->assertSame('2+2', $decision->arguments['expression']);
+    }
+
+    public function test_recovers_when_args_are_at_the_top_level(): void
+    {
+        // Model names the tool as the action AND drops args at the top level.
+        $raw = '{"action":"calculator","expression":"2+2"}';
+
+        $decision = (new DecisionParser)->parse($raw, $this->registry());
+
+        $this->assertInstanceOf(ToolCall::class, $decision);
+        $this->assertSame('calculator', $decision->tool);
+        $this->assertSame('2+2', $decision->arguments['expression']);
+    }
+
     public function test_rejects_unknown_tool(): void
     {
         $this->expectException(InvalidDecisionException::class);

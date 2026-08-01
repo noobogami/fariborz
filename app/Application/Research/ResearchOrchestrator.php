@@ -14,6 +14,7 @@ use App\Domain\Research\Contracts\ResearchJobRepository;
 use App\Domain\Research\Contracts\TraceRecorder;
 use App\Domain\Research\Enums\EventType;
 use App\Domain\Research\Enums\StepType;
+use App\Domain\Research\Enums\TaskStatus;
 use App\Domain\Research\ValueObjects\FinishDecision;
 use App\Domain\Research\ValueObjects\GuardrailVerdict;
 use App\Domain\Research\ValueObjects\ResearchContext;
@@ -23,6 +24,7 @@ use App\Events\ResearchCompleted;
 use App\Events\ResearchFailed;
 use App\Jobs\AdvanceResearchJob;
 use App\Models\ResearchJob;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 /**
@@ -46,6 +48,7 @@ class ResearchOrchestrator
         private HumanQuestionRepository $humanQuestions,
         private HumanAvailabilityService $humans,
         private TraceRecorder $trace,
+        private StartResearch $start,
     ) {}
 
     public function advance(string $jobId): void
@@ -65,6 +68,22 @@ class ResearchOrchestrator
             $this->finalizeByGuardrail($job, $stop);
 
             return;
+        }
+
+        // 1b. SUPERVISOR = deterministic control flow ("blueprint first, model
+        //     second"). The ORCHESTRATOR — not the weak model — delegates every
+        //     ready task and decides when to wait. The model is only asked for the
+        //     bounded steps it's good at: plan, review ONE task, or assemble/finish.
+        //     This is what killed the delegate→blocked→delegate thrash loop.
+        if ($job->isSupervisor()) {
+            if ($this->autoDelegateReadyTasks($job) > 0) {
+                $context = $this->buildContext($job);   // ready tasks are now running
+            }
+            if ($job->supervisorShouldWait()) {
+                $this->jobs->setActivity($job, 'awaiting_worker');   // wait for workers — no LLM call, no loop
+
+                return;
+            }
         }
 
         // 2. Ask the brain for the single next action.
@@ -106,6 +125,19 @@ class ResearchOrchestrator
             $this->trace->record($job, EventType::GuardrailTriggered, $verdict->message, ['tool' => $decision->tool]);
             $this->memory->appendToolObservation($job, $decision->tool, $verdict->message);
             $this->jobs->recordStep($job, $context->iteration, StepType::Observation, $verdict->message);
+
+            // A block is no progress. Count consecutive blocks and advance the
+            // iteration so budget guardrails still bound the run — otherwise a
+            // model that keeps choosing a blocked action loops forever (the exact
+            // bug that hung the Iran job). After a short streak, stop for real.
+            $this->jobs->incrementIteration($job);
+            if ($this->bumpStall($job) >= (int) config('research.limits.max_stalls', 6)) {
+                $this->finalizeByGuardrail($job, GuardrailVerdict::stop('stalled',
+                    'Stopped: the agent kept choosing blocked actions and made no progress.'));
+
+                return;
+            }
+
             $this->reschedule($job);
 
             return;
@@ -135,6 +167,7 @@ class ResearchOrchestrator
 
         $this->jobs->incrementToolCalls($job);
         $this->jobs->incrementIteration($job);
+        $this->resetStall($job);   // real work happened → clear the stall streak
 
         event(new ResearchAdvanced($job->id, $context->iteration));
 
@@ -189,9 +222,61 @@ class ResearchOrchestrator
 
         match ($stop->reason) {
             'cancelled' => $this->cancel($job),
-            'timeout', 'max_iterations', 'max_tool_calls' => $this->forceFinalReport($job, $stop),
+            'timeout', 'max_iterations', 'max_tool_calls', 'stalled' => $this->forceFinalReport($job, $stop),
             default => $this->fail($job, $stop->message),
         };
+    }
+
+    /**
+     * Deterministic delegation: spawn a worker for EVERY ready pending task (deps
+     * all Done). The orchestrator does this — not the model — so ready tasks always
+     * start (independents in parallel), and the supervisor never has to "decide" to
+     * delegate. Returns how many were started.
+     */
+    private function autoDelegateReadyTasks(ResearchJob $job): int
+    {
+        $tasks = $job->tasks()->get();
+        $done = $tasks->where('status', TaskStatus::Done)->pluck('seq')->map(fn ($s) => (int) $s)->all();
+        $spawned = 0;
+
+        foreach ($tasks as $task) {
+            if ($task->status !== TaskStatus::Pending || ! $task->isReady($done)) {
+                continue;
+            }
+
+            $goal = "TASK — your single objective:\n{$task->title}\n{$task->brief}\n\n"
+                ."This is ONE part of a larger project. The overall project goal is:\n\"{$job->goal}\"\n\n"
+                .'You SHARE the project workspace with the other sub-agents — read what they wrote '
+                ."(list_files / read_file) and write your output into the file path(s) the task names.\n"
+                .'Do ONLY this task. Finish with a report that IS the deliverable (the actual '
+                .'content / result / answer), not a description of it.';
+
+            $worker = $this->start->spawnWorker($job, $task, $goal);
+            $task->update([
+                'status' => TaskStatus::InProgress,
+                'child_job_id' => $worker->id,
+                'attempts' => $task->attempts + 1,
+            ]);
+            $this->trace->record($job, EventType::Observation,
+                "Delegated task #{$task->seq} \"{$task->title}\" to a worker sub-agent.",
+                ['task' => $task->seq, 'worker_id' => $worker->id, 'auto' => true]);
+            $spawned++;
+        }
+
+        return $spawned;
+    }
+
+    private function bumpStall(ResearchJob $job): int
+    {
+        $n = (int) Cache::get("research:stall:{$job->id}", 0) + 1;
+        Cache::put("research:stall:{$job->id}", $n, 3600);
+
+        return $n;
+    }
+
+    private function resetStall(ResearchJob $job): void
+    {
+        Cache::forget("research:stall:{$job->id}");
     }
 
     /**

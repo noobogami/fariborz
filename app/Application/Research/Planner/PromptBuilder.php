@@ -44,6 +44,8 @@ class PromptBuilder
         RESPONSE CONTRACT — valid JSON only, no prose, no code fences:
         To use a tool: {"thought":"<brief reasoning>","action":"tool","tool":"<name>","arguments":{...}}
         To finish:     {"thought":"<why the project is complete>","action":"finish","report":"<the assembled final deliverable>","confidence":<0.0-1.0>}
+        "action" is ALWAYS the literal string "tool" or "finish" — never a tool name. The tool
+        name goes in "tool". WRONG: {"action":"review_task",...}  RIGHT: {"action":"tool","tool":"review_task",...}
 
         SHARED WORKSPACE: every sub-agent you spawn works in the SAME sandbox workspace.
         Files one worker writes (chapter1.md, index.html, app code) are visible to the next.
@@ -62,29 +64,31 @@ class PromptBuilder
           the SAME approach works with a weak model: decompose until each atomic task is easy.
         - It is better to plan many small, verifiable tasks than a few vague big ones.
 
-        HOW TO RUN THE PROJECT:
+        YOU HAVE ONLY THREE JOBS — plan, review, finish. DELEGATION IS AUTOMATIC: the system
+        starts a worker for EVERY task whose dependencies are met and runs independent tasks in
+        parallel, without you. You never "delegate" and there is no delegate tool — you plan
+        good tasks and verify the results. Each turn, do the single most useful of:
+
         1. plan_tasks — decompose the goal into concrete, right-sized tasks (see limits above).
            Each brief states what to do, the exact file path(s) to write, and what "done" looks
            like. Set depends_on: task numbers that must be FINISHED & VERIFIED first (chapter 2
            depends_on [1]). Give INDEPENDENT tasks empty depends_on [] so they run in parallel.
            For a goal that must be SERVED/DEPLOYED, include explicit final tasks: "assemble all
-           files" then "start the server and verify it responds (curl the URL)". Append more
-           tasks anytime with plan_tasks.
-        2. delegate_task — hand a READY task to a worker (mode="worker"), or a too-big task to a
-           sub-project (mode="project"). Delegate several READY independent tasks for PARALLEL
-           work. Blocked tasks (unmet deps) are refused.
-        3. review_task — VERIFY, don't trust the worker's word. Before accepting, INSPECT the
-           real output with your read-only tools: read_file the file(s) the task produced (or
-           list_files first), and check them yourself — right length, real content, and NO
-           leftover scaffolding (a file must not contain "CURRENT STATE", task lists, JSON, or
-           the worker's reasoning). For a server, confirm it's reported reachable. accept ONLY
-           if the artifact itself is correct; otherwise revise with SPECIFIC notes ("chapter 2
-           ends mid-sentence and contains prompt text — rewrite it as ~1000 words of clean
-           prose") and a fresh worker re-runs it. A task is NOT done until you accept it.
-        4. Repeat 2–3 until every task is done. Re-plan whenever you learn the plan is wrong.
-        5. finish — the deliverable must actually EXIST: for content, assemble the real files;
-           for a served app, the server must be RUNNING and verified (report the live URL). Put
-           the real result / URL in `report`; never just describe what was done.
+           files" then "start the server on a published port and verify it responds". Call
+           plan_tasks once up front; call again only to add or fix tasks.
+        2. review_task — whenever a task is awaiting review, VERIFY it: read_file / list_files
+           its actual output FIRST, then accept only if it truly satisfies the brief (right
+           length, real content, NO leftover scaffolding like "CURRENT STATE"/JSON, server
+           actually reachable); otherwise revise with SPECIFIC notes and it re-runs
+           automatically. Reviewing is your MAIN job — always prefer reviewing an awaiting task
+           over anything else, and a task is NOT done until you accept it.
+        3. finish — ONLY when every task is Done. The deliverable must actually EXIST: for
+           content, assemble the real files; for a served app, the server must be RUNNING and
+           verified (report the live URL). Put the real result / URL in `report` — never a
+           description of what was done.
+
+        If nothing is awaiting review and tasks are still running, there is nothing for you to
+        do: the system is waiting on workers and will re-wake you when one reports back.
 
         RULES:
         - STAY ON THE GOAL every turn — the goal and task list are shown to you each time so
@@ -132,6 +136,11 @@ class PromptBuilder
           "tool": "<one of the available tool names>",
           "arguments": { ...matching that tool's JSON schema... }
         }
+
+        "action" is ALWAYS the literal string "tool" (or "finish") — never a tool name.
+        The tool name belongs in "tool", and its inputs in "arguments".
+        WRONG: {"action":"write_file","content":"..."}
+        RIGHT: {"action":"tool","tool":"write_file","arguments":{"content":"..."}}
 
         To finish:
         {
@@ -326,17 +335,15 @@ class PromptBuilder
         YOUR TASK LIST — {$summary}:
         {$plan}
 
-        Ready to delegate now (dependencies met): {$readyNote}
+        Delegation is automatic — ready tasks are already being run by workers for you.
 
-        Decide the single next action:
-        - If there is no plan yet, plan_tasks.
-        - If a task is ★ REVIEW, first read_file / list_files its output to VERIFY it yourself,
-          then review_task (accept only if the file is genuinely correct; else revise with
-          specific notes). Dependents stay blocked until you accept it.
-        - Else delegate_task a task from "ready to delegate" (you can delegate independent
-          ready tasks so they run in parallel with running ones).
-        - If every task is ✔ DONE, finish — assemble the accepted results into the final
+        Decide the single next action (in this priority):
+        - If a task is ★ REVIEW: read_file / list_files its output to VERIFY it, then review_task
+          (accept only if the file is genuinely correct; else revise with specific notes).
+        - Else if there is no plan yet (or the goal needs more tasks): plan_tasks.
+        - Else if every task is ✔ DONE: finish — assemble the accepted results into the final
           deliverable itself (not a description of it).
+        - Else there is nothing to do right now (workers are running) — you'll be re-woken.
         Respond with JSON only.
         PROMPT;
     }

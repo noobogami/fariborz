@@ -17,6 +17,9 @@ return [
         'max_tool_failures' => env('RESEARCH_MAX_TOOL_FAILURES', 3),
         // How many consecutive invalid LLM responses before we fail the job.
         'max_parse_failures' => env('RESEARCH_MAX_PARSE_FAILURES', 3),
+        // How many consecutive blocked/no-progress actions before we stop (a weak
+        // model can otherwise choose a blocked action forever — the stall breaker).
+        'max_stalls' => env('RESEARCH_MAX_STALLS', 6),
     ],
 
     /*

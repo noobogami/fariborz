@@ -22,7 +22,11 @@ class RepeatedFailureGuardrail implements Guardrail
 
     public function evaluate(ResearchContext $ctx, ?Decision $decision): GuardrailVerdict
     {
-        if (! $decision instanceof ToolCall) {
+        // Not for supervisors: their control tools (review/plan) legitimately
+        // repeat, and a task that "fails" for unmet-dependency reasons is control
+        // feedback, not a broken tool — penalising it poisoned delegation and
+        // caused an infinite block loop.
+        if (! $decision instanceof ToolCall || $ctx->isSupervisor()) {
             return GuardrailVerdict::pass();
         }
 
