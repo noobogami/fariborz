@@ -1,0 +1,229 @@
+# Full local stack for the Autonomous Research Agent.
+#
+#   docker compose up -d --build          # start everything
+#   docker compose --profile setup run --rm ollama-pull   # pull the local model (once)
+#   docker compose logs -f worker         # watch the loop engine
+#   docker compose exec app php artisan research:start "Is Company X a good supplier?"
+#   docker compose exec app php artisan research:trace <job-id>
+#
+# Services:
+#   mysql      – state store (jobs, steps, events, memory, humans)
+#   redis      – queue backend (the planner loop runs on the "research" queue)
+#   ollama     – local, offline LLM inference (no cloud calls)
+#   init       – one-shot: composer install, key:generate, migrate, seed
+#   app        – PHP-FPM (serves the API behind nginx)
+#   nginx      – HTTP entrypoint on :8080
+#   worker     – php artisan queue:work --queue=research  (drives every iteration)
+#   scheduler  – php artisan schedule:work (re-evaluates the human-question queue)
+
+# Credentials, database name, and the LLM model are read from the project .env
+# (Compose interpolates ${VAR:-default} at `up` time). Copy .env.example to .env
+# to override; the defaults below keep `up` working without one.
+#
+# NOTE: DB_HOST / REDIS_HOST are intentionally the Compose SERVICE names, not
+# taken from .env — inside the network the app reaches the DB at "mysql" and
+# Redis at "redis". (.env's 127.0.0.1 values are only for running natively.)
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-local}
+  APP_DEBUG: ${APP_DEBUG:-true}
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_DATABASE: ${DB_DATABASE:-research_agent}
+  DB_USERNAME: ${DB_USERNAME:-research}
+  DB_PASSWORD: ${DB_PASSWORD:-secret}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_CLIENT: ${REDIS_CLIENT:-phpredis}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  QUEUE_CONNECTION: redis
+  RESEARCH_QUEUE_NAME: ${RESEARCH_QUEUE_NAME:-research}
+  CACHE_STORE: redis
+  SESSION_DRIVER: file
+  # Offline LLM by default — talks to the ollama service below.
+  RESEARCH_LLM_DRIVER: ${RESEARCH_LLM_DRIVER:-ollama}
+  RESEARCH_LLM_MODEL: ${RESEARCH_LLM_MODEL:-qwen3:30b}
+  OLLAMA_BASE_URL: http://ollama:11434
+  OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
+  OLLAMA_THINK: ${OLLAMA_THINK:-false}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # Headless-browser microservice (free web search + page extraction, no API key).
+  BROWSER_SERVICE_URL: http://browser:3000
+  # Isolated code sandbox (write files + run commands to build/test apps).
+  SANDBOX_SERVICE_URL: http://sandbox:3000
+
+x-app-build: &app-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+  volumes:
+    - .:/var/www/html
+    - vendor:/var/www/html/vendor          # keep container-built vendor over the bind mount
+  environment: *app-env
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-research_agent}
+      MYSQL_USER: ${DB_USERNAME:-research}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysqldata:/var/lib/mysql
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    healthcheck:
+      # $$ escapes Compose interpolation so the container shell reads its own env.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    # Auth is OPTIONAL: --requirepass is added only when REDIS_PASSWORD is set.
+    # Empty (the default) = no password, matching a typical local Redis.
+    command: ["sh", "-c", "redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass \"$$REDIS_PASSWORD\"}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a \"$$REDIS_PASSWORD\"} ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama               # persists pulled models
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # ── GPU (optional) ──────────────────────────────────────────────────────
+    # For NVIDIA GPUs, install the container toolkit and uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Isolated code sandbox: the agent writes files and runs commands HERE (never
+  # on the host) to build & test software. Resource-limited; see services/sandbox.
+  sandbox:
+    build:
+      context: ./services/sandbox
+    ports:
+      - "${SANDBOX_PORT:-3002}:3000"                 # the sandbox exec/file API
+      - "8090-8099:8090-8099"                        # a pool of host-published ports for web apps
+    environment:
+      SANDBOX_APP_PORTS: "8090-8099"                  # the published pool, advertised to the agent via /info
+    volumes:
+      - sandbox_workspace:/workspace     # persists the agent's projects
+      - sandbox_cargo:/root/.cargo       # persist cargo registry + `cargo install` bins
+      - sandbox_go:/root/go              # persist go modules + `go install` bins
+      - sandbox_pipcache:/root/.cache    # persist pip download cache
+    # Guard rails for running arbitrary code. Tune to taste.
+    init: true            # tini reaps orphaned processes so killed command-trees don't linger as zombies
+    mem_limit: ${SANDBOX_MEM:-2g}
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Headless Chromium (Playwright) so the agent can use free web UIs — search
+  # engines and public pages — without a paid search API. See services/browser.
+  browser:
+    build:
+      context: ./services/browser
+    ports:
+      - "${BROWSER_PORT:-3001}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot pull of the local model. Run once:
+  #   docker compose --profile setup run --rm ollama-pull
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: ["setup"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${RESEARCH_LLM_MODEL:-qwen3:30b}"]
+
+  # One-shot bootstrap: deps, key, schema, seed data. Everything else waits on it.
+  init:
+    <<: *app-build
+    command: ["init"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    <<: *app-build
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    expose:
+      - "9000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - app
+    volumes:
+      - .:/var/www/html
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${APP_PORT:-8080}:80"
+
+  worker:
+    <<: *app-build
+    command: ["php", "artisan", "queue:work", "--queue=research", "--tries=1", "--timeout=200"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  scheduler:
+    <<: *app-build
+    command: ["php", "artisan", "schedule:work"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  mysqldata:
+  redisdata:
+  ollama:
+  vendor:
+  sandbox_workspace:
+  sandbox_cargo:
+  sandbox_go:
+  sandbox_pipcache:

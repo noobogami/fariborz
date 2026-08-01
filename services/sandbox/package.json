@@ -1,0 +1,11 @@
+{
+  "name": "research-sandbox-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated code sandbox: the research agent writes files and runs commands here (never on the host) to build and test software.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "research-browser-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless-browser microservice (Playwright) that lets the research agent use free web UIs (search + page extraction) without a paid API key.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "1.48.0"
+  }
+}
