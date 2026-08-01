@@ -13,25 +13,35 @@ class EloquentResearchJobRepository implements ResearchJobRepository
 {
     public function find(string $id): ResearchJob
     {
-        return ResearchJob::findOrFail($id);
+        // Accept either the UUID (internal/foreign keys) or the human-readable
+        // slug (URLs, sandbox), so both resolve the same job.
+        return ResearchJob::where('id', $id)->orWhere('slug', $id)->firstOrFail();
     }
 
     public function create(string $goal, array $config, JobRole $role = JobRole::Solo, ?string $parentId = null): ResearchJob
     {
         $limits = $config['limits'] ?? config('research.limits');
 
-        // The whole project tree shares ONE sandbox workspace = the root's id.
+        $slug = ResearchJob::generateSlug($goal);
+
+        // The whole project tree shares ONE sandbox workspace, named by the ROOT
+        // job's slug so the folder on disk is legible. Children inherit both the
+        // root id and the root's workspace_slug from their parent.
         $root = null;
+        $workspaceSlug = $slug; // a top-level job's workspace is its own slug
         if ($parentId) {
             $parent = ResearchJob::find($parentId);
             $root = $parent?->root_job_id ?? $parentId;
+            $workspaceSlug = $parent?->workspace_slug ?: $slug;
         }
 
         $job = ResearchJob::create([
             'goal' => $goal,
+            'slug' => $slug,
             'role' => $role,
             'parent_job_id' => $parentId,
             'root_job_id' => $root,
+            'workspace_slug' => $workspaceSlug,
             'status' => JobStatus::Running,
             'config' => $config,
             'started_at' => now(),

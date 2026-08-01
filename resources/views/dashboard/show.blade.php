@@ -23,10 +23,14 @@
             <div class="fz-mono flex flex-wrap items-center gap-2 mb-2" style="font-size:10.5px;color:#8a9499">
                 <a href="{{ route('dashboard') }}" style="color:#8a9499">JOBS</a>
                 <span style="color:#394246">/</span>
-                <span style="color:#ea638c">job_{{ \Illuminate\Support\Str::substr($jobId, -8) }}</span>
+                <span style="color:#ea638c">{{ $jobSlug ?? ('job_'.\Illuminate\Support\Str::substr($jobId, -8)) }}</span>
                 <span style="color:#394246">/</span>
                 <span>ITER {{ $initial['job']['iteration'] ?? 0 }} OF {{ $maxIter }}</span>
                 <span style="font-size:8.5px;letter-spacing:.11em;padding:2px 7px;border-radius:5px;background:{{ $roleBadge['bg'] }};border:1px solid {{ $roleBadge['bd'] }};color:{{ $roleBadge['fg'] }}">{{ $roleLabel }}</span>
+                @if (! empty($workspaceSlug))
+                    <a href="{{ route('sandbox') }}?job={{ $workspaceSlug }}" title="Open this job's sandbox workspace"
+                       style="font-size:8.5px;letter-spacing:.05em;padding:2px 7px;border-radius:5px;background:rgba(234,99,140,.1);border:1px solid rgba(234,99,140,.3);color:#ffb3c4;text-decoration:none">⌗ {{ $workspaceSlug }}</a>
+                @endif
             </div>
             <h1 style="margin:0;font-size:19px;line-height:1.32;font-weight:600;letter-spacing:-.015em;color:#f2f5f6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:92ch">{{ $initial['job']['goal'] }}</h1>
         </div>
@@ -65,7 +69,7 @@
         <a :href="'/jobs/' + extras.parent.id" class="flex items-center" style="gap:12px;margin-bottom:16px;padding:11px 15px;border-radius:12px;border:1px solid rgba(234,99,140,.26);background:linear-gradient(90deg,rgba(234,99,140,.11),rgba(27,32,33,.6));color:#dbe2e4;text-decoration:none"
            onmouseover="this.style.borderColor='rgba(234,99,140,.5)'" onmouseout="this.style.borderColor='rgba(234,99,140,.26)'">
             <span class="fz-mono" style="font-size:9px;letter-spacing:.11em;padding:3px 7px;border-radius:5px;background:rgba(234,99,140,.16);border:1px solid rgba(234,99,140,.34);color:#ffb3c4;flex:0 0 auto">SUB-AGENT</span>
-            <span style="font-size:12.5px;line-height:1.5;min-width:0">part of <span class="fz-mono" style="color:#ffb3c4" x-text="'job_' + String(extras.parent.id).slice(-8)"></span> (supervisor)<template x-if="extras.parent.task_seq"><span> · task #<span x-text="extras.parent.task_seq"></span>: <span x-text="extras.parent.task_title"></span></span></template></span>
+            <span style="font-size:12.5px;line-height:1.5;min-width:0">part of <span class="fz-mono" style="color:#ffb3c4" x-text="extras.parent.slug || ('job_' + String(extras.parent.id).slice(-8))"></span> (supervisor)<template x-if="extras.parent.task_seq"><span> · task #<span x-text="extras.parent.task_seq"></span>: <span x-text="extras.parent.task_title"></span></span></template></span>
             <span class="fz-mono" style="margin-left:auto;font-size:10.5px;color:#96a0a5;flex:0 0 auto">up to supervisor →</span>
         </a>
     </template>

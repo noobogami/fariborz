@@ -83,7 +83,7 @@
                                     <a :href="'http://localhost:' + p.port" target="_blank" class="fz-mono" style="font-size:10px;padding:2px 7px;border-radius:5px;background:rgba(234,99,140,.12);border:1px solid rgba(234,99,140,.3);color:#ffb3c4;text-decoration:none" x-text="':' + p.port"></a>
                                 </div>
                                 <div>
-                                    <template x-if="p.job"><a :href="'/jobs/' + p.job" class="fz-mono" style="font-size:10.5px;color:#96a0a5" x-text="'job_' + String(p.job).slice(-8)"></a></template>
+                                    <template x-if="p.job"><a :href="'/jobs/' + p.job" class="fz-mono" style="font-size:10.5px;color:#96a0a5" x-text="p.job"></a></template>
                                     <template x-if="!p.job"><span class="fz-mono" style="font-size:10.5px;color:#8a9499">—</span></template>
                                 </div>
                                 <div style="text-align:right">
@@ -103,7 +103,7 @@
                 <span class="fz-mono" style="font-size:10.5px;color:#8a9499">30s timeout · cd persists · ↑/↓ history</span>
                 <div class="flex items-center" style="margin-left:auto;gap:6px">
                     <span class="fz-mono" style="font-size:10px;color:#8a9499">workspace</span>
-                    <input x-model="job" @change="boot()" class="fz-mono" style="width:130px;padding:5px 9px;border-radius:7px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px" placeholder="job id or 'console'">
+                    <input x-model="job" @change="boot()" class="fz-mono" style="width:130px;padding:5px 9px;border-radius:7px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px" placeholder="workspace slug or 'console'">
                 </div>
             </div>
 
@@ -194,7 +194,8 @@ function sandboxPage() {
         quickCmds: ['ps aux', 'df -h', 'ls -la', 'pip list', 'python --version', 'netstat -tlnp'],
 
         // ── console state ───────────────────────────────────────────────────
-        job: 'console',
+        // Deep-linkable: /sandbox?job=<workspace-slug> opens straight into a job's workspace.
+        job: new URLSearchParams(location.search).get('job') || 'console',
         cwd: '',
         input: '',
         lines: [],

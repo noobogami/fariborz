@@ -39,19 +39,20 @@ class DashboardController extends Controller
             ->whereNull('parent_job_id')
             ->latest('created_at')
             ->limit(50)
-            ->get(['id', 'goal', 'status', 'role', 'iteration', 'tool_call_count', 'confidence', 'created_at']);
+            ->get(['id', 'slug', 'goal', 'status', 'role', 'iteration', 'tool_call_count', 'confidence', 'created_at']);
 
         $supIds = $jobs->where('role', JobRole::Supervisor)->pluck('id');
         $tasksByJob = $supIds->isEmpty() ? collect()
             : ResearchTask::whereIn('research_job_id', $supIds)->orderBy('seq')->get()->groupBy('research_job_id');
         $childrenByParent = $supIds->isEmpty() ? collect()
             : ResearchJob::whereIn('parent_job_id', $supIds)->latest('created_at')
-                ->get(['id', 'goal', 'status', 'role', 'iteration', 'tool_call_count', 'confidence', 'created_at', 'parent_job_id'])
+                ->get(['id', 'slug', 'goal', 'status', 'role', 'iteration', 'tool_call_count', 'confidence', 'created_at', 'parent_job_id'])
                 ->groupBy('parent_job_id');
 
         return $jobs->map(function (ResearchJob $j) use ($tasksByJob, $childrenByParent) {
             $row = [
                 'id' => $j->id,
+                'slug' => $j->slug,
                 'goal' => $j->goal,
                 'status' => $j->status->value,
                 'role' => $j->role->value,
@@ -69,6 +70,7 @@ class DashboardController extends Controller
 
                     return [
                         'id' => $w->id,
+                        'slug' => $w->slug,
                         'status' => $w->status->value,
                         'iteration' => (int) $w->iteration,
                         'tool_call_count' => (int) $w->tool_call_count,
@@ -94,6 +96,8 @@ class DashboardController extends Controller
 
         return view('dashboard.show', [
             'jobId' => $id,
+            'jobSlug' => $job->slug,
+            'workspaceSlug' => $job->workspace_slug,
             'initial' => $data,
             'questions' => $this->questionsFor($id),
         ]);
@@ -363,6 +367,7 @@ class DashboardController extends Controller
 
                 return [
                     'id' => $w->id,
+                    'slug' => $w->slug,
                     'status' => $w->status->value,
                     'iteration' => (int) $w->iteration,
                     'max_iterations' => (int) ($w->config['limits']['max_iterations'] ?? config('research.supervisor.worker_max_iterations', 20)),
@@ -379,6 +384,7 @@ class DashboardController extends Controller
             $task = ResearchTask::where('child_job_id', $job->id)->first();
             $out['parent'] = $parent ? [
                 'id' => $parent->id,
+                'slug' => $parent->slug,
                 'goal' => $parent->goal,
                 'task_seq' => $task?->seq,
                 'task_title' => $task?->title,

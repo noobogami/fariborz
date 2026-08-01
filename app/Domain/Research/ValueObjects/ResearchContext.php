@@ -39,10 +39,14 @@ final class ResearchContext
      * The sandbox workspace this job builds in. The WHOLE project tree shares the
      * root's workspace, so files a worker writes are visible to sibling workers
      * and a served app can be assembled + deployed in one place.
+     *
+     * Named by the root's human-readable slug (workspace_slug) so /workspace/<id>
+     * is findable by a person; falls back to the root UUID for legacy rows that
+     * predate the slug column.
      */
     public function workspaceId(): string
     {
-        return $this->job->root_job_id ?: $this->job->id;
+        return $this->job->workspace_slug ?: ($this->job->root_job_id ?: $this->job->id);
     }
 
     public function isSupervisor(): bool

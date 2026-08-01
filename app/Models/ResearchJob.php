@@ -10,9 +10,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 /**
  * @property string $id
+ * @property string $slug
+ * @property string $workspace_slug
  * @property string $goal
  * @property array|null $requirements
  * @property JobStatus $status
@@ -40,6 +43,7 @@ class ResearchJob extends Model
         'status' => JobStatus::class,
         'role' => JobRole::class,
         'config' => 'array',
+        'requirements' => 'array',
         'confidence' => 'float',
         'partial' => 'boolean',
         'started_at' => 'datetime',
@@ -136,5 +140,27 @@ class ResearchJob extends Model
     public function limit(string $key): int
     {
         return (int) ($this->config['limits'][$key] ?? config("research.limits.$key"));
+    }
+
+    /**
+     * A short, human-readable id derived from the goal plus a random suffix
+     * (e.g. "todo-app-4f21a"). Unique — retries the suffix on the rare clash.
+     * Non-latin goals collapse to the "job-…" fallback, still legible + unique.
+     */
+    public static function generateSlug(string $goal): string
+    {
+        $base = Str::of($goal)->ascii()->lower()
+            ->replaceMatches('/[^a-z0-9]+/', '-')
+            ->trim('-')->limit(32, '')->trim('-')->value();
+
+        if ($base === '') {
+            $base = 'job';
+        }
+
+        do {
+            $slug = $base.'-'.substr(bin2hex(random_bytes(3)), 0, 5);
+        } while (static::where('slug', $slug)->exists());
+
+        return $slug;
     }
 }

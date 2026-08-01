@@ -106,7 +106,7 @@
                                             <span class="fz-mono" style="flex:0 0 auto;font-size:8.5px;letter-spacing:.1em;padding:2px 7px;border-radius:5px;background:rgba(234,99,140,.14);border:1px solid rgba(234,99,140,.34);color:#ffb3c4">SUPERVISED</span>
                                         </template>
                                     </div>
-                                    <div class="fz-mono" style="font-size:9.5px;color:#8a9499;margin-top:4px" x-text="'job_' + String(j.id).slice(-8) + supNote(j)"></div>
+                                    <div class="fz-mono" style="font-size:9.5px;color:#8a9499;margin-top:4px" x-text="(j.slug || ('job_' + String(j.id).slice(-8))) + supNote(j)"></div>
                                     <template x-if="j.role === 'supervisor' && (j.tasks || []).length">
                                         <div class="flex items-center" style="gap:9px;margin-top:7px;max-width:320px">
                                             <span class="fz-mono" style="font-size:9.5px;color:#c8d0d3;flex:0 0 auto" x-text="taskDone(j) + '/' + j.tasks.length + ' tasks'"></span>
@@ -150,7 +150,7 @@
                                         <div class="flex items-center" style="min-width:0;gap:10px" :style="{ borderLeft: '2px solid '+tone(w.status).fg, paddingLeft: '11px' }">
                                             <div style="min-width:0">
                                                 <div class="flex items-center" style="gap:7px;min-width:0">
-                                                    <span class="fz-mono" style="font-size:11px;color:#c8d0d3;flex:0 0 auto" x-text="'job_' + String(w.id).slice(-8)"></span>
+                                                    <span class="fz-mono" style="font-size:11px;color:#c8d0d3;flex:0 0 auto" x-text="w.slug || ('job_' + String(w.id).slice(-8))"></span>
                                                     <span class="fz-mono" style="flex:0 0 auto;font-size:8.5px;letter-spacing:.1em;padding:1px 6px;border-radius:5px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:#96a0a5">WORKER</span>
                                                     <template x-if="w.task_seq"><span class="fz-mono" style="font-size:9.5px;color:#8a9499;flex:0 0 auto" x-text="'TASK #' + w.task_seq"></span></template>
                                                 </div>
