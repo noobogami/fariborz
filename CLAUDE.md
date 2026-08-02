@@ -31,7 +31,9 @@ A job has a **role**: `solo` (original single loop), `supervisor` (decomposes a 
 - `app/Application/Research/`
   - `ResearchOrchestrator.php` — the loop + supervisor deterministic driver (`autoDelegateReadyTasks`, stall breaker, auto-extend).
   - `StartResearch.php` (`handle`, `spawnWorker`), `ContinueResearch.php` (follow-up guidance).
-  - `Planner/` — `LlmPlanner` (calls LLM, streams "thinking"), `PromptBuilder` (system + per-turn prompts; **supervisor vs worker prompts branch here**), `DecisionParser`.
+  - `Planner/` — `LlmPlanner` (calls LLM, streams "thinking"), `PromptBuilder` (system + per-turn prompts; **supervisor vs worker prompts branch here**), `DecisionParser`, `ModelRouter` (**per-task model routing** — see below).
+  - **LLM drivers** live in `app/Infrastructure/Research/Llm/` (`OllamaClient` = local/offline direct, `AnthropicClient` = cloud direct, `OpenAiCompatibleClient` = any OpenAI-compatible gateway), bound by `research.llm.driver` in `ResearchServiceProvider::register()`. **The router is a self-hosted LiteLLM proxy** (`services/litellm/config.yaml` + `litellm` compose service) fronting local Ollama AND cloud providers (OpenAI/Anthropic/Gemini/DeepSeek) behind one endpoint; `OpenAiCompatibleClient` (driver `openai_compatible`, `research.llm.openai_compatible.base_url` → `http://litellm:4000/v1`) talks to it — but it's generic, so it also works against LocalAI/vLLM/OpenRouter by changing the URL. Provider API keys live in the **gateway's** env, not the app; the app only holds `services.openai_compatible.key` (the gateway's own key, may be blank).
+  - **Per-task routing (no role→model hardcoding):** `config('research.llm.tiers')` maps `light|standard|hard → model`. When the supervisor calls `plan_tasks` it tags each task with a `tier` (a bounded "how hard is this?" call); the worker for that task runs on that tier's model. `ModelRouter::apply($job)` pins the tier's model into `config('research.llm.model')` each turn (workers read `config['tier']`; solo/supervisor use `default_tier`). A **blank tier model falls back to the global model**. With the gateway, tier models are LiteLLM names (`local-fast`/`local-standard`/`local-hard` = offline Ollama, `gpt-4o`/`claude`/`gemini`/`deepseek` = cloud when online) — so a task's difficulty routes it to a local or cloud model. **Reasoning (`think`) is baked per-tier in `services/litellm/config.yaml`**: ON for `standard` (the default / supervisor / most work) and `hard`, OFF only for `light` (trivial mechanical tasks). Hard-won: a weak model (qwen3:8b) with thinking OFF botches the response *envelope* on complex decisions — it emits a tool's args with no `{"action":"tool",...}` wrapper, tripping `invalid_llm_response` until the job fails. Thinking is ~50× slower but necessary for correctness there; only genuinely trivial tasks can skip it. The gateway path also sends `response_format=json_object` (`research.llm.openai_compatible.force_json`, → Ollama `format:json`) so output is always a JSON object. There's no global think flag on the gateway path (unlike the direct `ollama` driver's `OLLAMA_THINK`); tier choice sets it. All editable in Settings. The chosen model+tier is stored in each turn's trace and shown per-turn in the job flow UI (`ResearchTraceReader::turnMeta` → `show.blade.php`).
   - `Tools/ToolRegistry.php` — role-gates which tools each role sees. `ToolRunner.php` — executes with retries/tracing.
   - `Guardrails/` — preflight (limits/timeout/cancel) + action (duplicate/repeated-failure).
   - `Sandbox/SandboxClient.php`, `Browser/BrowserClient.php`, `Tracing/` (`ResearchTraceReader`, `DbTraceRecorder`).
@@ -46,7 +48,7 @@ A job has a **role**: `solo` (original single loop), `supervisor` (decomposes a 
 
 ## Services & running
 
-Docker Compose: `mysql`, `redis`, `ollama` (+`ollama-pull`), `sandbox`, `browser`, `app`, `nginx`, `worker`, `scheduler`. In dev the app is often run on the host via `php artisan serve` and the queue via `php artisan queue:work --queue=research` (run **2–3 workers** so parallel sub-agents actually run concurrently).
+Docker Compose: `mysql`, `redis`, `litellm` (the LLM gateway), `sandbox`, `browser`, `app`, `nginx`, `worker`, `scheduler`. **Ollama is NOT a default container** — on macOS/Windows run it natively for GPU acceleration (containers reach it via `host.docker.internal`, needs `OLLAMA_HOST=0.0.0.0` on the host); a dockerized Ollama + its `ollama-pull` helper live behind `--profile ollama-docker` for Linux/opt-in use. In dev the app is often run on the host via `php artisan serve` and the queue via `php artisan queue:work --queue=research` (run **2–3 workers** so parallel sub-agents actually run concurrently).
 
 - Start a job (CLI): `php artisan research:start "<goal>"`. Trace it: `php artisan research:trace <job-id>`.
 - LLM driver/model, API keys, limits are all **configurable at runtime via the Settings UI** (`settings` table overrides `config()`), applied per-iteration.
@@ -65,6 +67,19 @@ Docker Compose: `mysql`, `redis`, `ollama` (+`ollama-pull`), `sandbox`, `browser
 - **A `write_file` may contain the model's own prompt scaffolding** ("CURRENT STATE"…); `WriteFileTool` strips it. The **supervisor must read the actual artifact** (`read_file`/`list_files`) before accepting a task — don't trust a worker's self-report.
 - Keyless web search is unreliable (SERPs block bots); Tavily/Brave/SerpAPI keys make it dependable (Settings UI). Wikipedia is the reliable keyless seed.
 - Redis may need a password in this env (`REDIS_PASSWORD`). `CACHE_STORE`/`QUEUE_CONNECTION` are redis.
+
+## Session handoff — supervised-job reliability (continue here)
+
+**Where it stands:** the supervisor infinite-loop is fixed. Root cause was letting the weak model own control flow (it thrashed delegate→blocked→delegate, iteration frozen). Fix = deterministic orchestration (orchestrator auto-delegates ready tasks; `delegate_task` removed from the supervisor's tools; LLM only does plan/review/finish) + stall breaker + supervisor exempt from duplicate/repeated-failure guardrails. Verified live on a small project: clean completion, dependency ordering, parallel independents, real assembled deliverable, no leak. Also live-verified earlier: shared workspace assemble+deploy, `start_server` published-port guard (8090–8099), write-file prompt-leak strip, supervisor reads artifacts before accepting.
+
+**Known rough edges / next candidates (not yet done):**
+- **Automated acceptance checks** — the reviewer still eyeballs artifacts. Turn each task's brief into a checkable acceptance command the reviewer runs (curl the URL, count words, run tests) before accepting. This is the biggest remaining lever toward "flawless."
+- **Weak-model JSON slips** — `{"action":"review_task"}` instead of `{"action":"tool","tool":"review_task"}`. Prompt now warns against it; watch for recurrence / consider tolerant parsing in `DecisionParser`.
+- **Duplicate `child_job_id`** was seen on two independent tasks in one run (both showed the same worker id in a snapshot) — worth confirming `autoDelegateReadyTasks` isn't double-assigning under parallel workers; deliverable was still correct.
+- **Speed** — qwen3:8b is ~1–2 min/turn, so big jobs take a long time (expected). Not a bug.
+- **Recursion (`mode="project"` sub-supervisors)** still exists via `DelegateTaskTool` but the supervisor no longer triggers it (delegation is deterministic/worker-only). If you want big tasks to auto-recurse, add a `complex` flag to `plan_tasks`/`research_tasks` and have `autoDelegateReadyTasks` spawn a sub-supervisor for those.
+
+**To run a live test:** ensure `sandbox`+`ollama` up, restart workers (`pkill -f queue:work` then launch 2–3 `php artisan queue:work --queue=research`), start a supervised job, trace with `php artisan research:trace <id>`. Reference stuck job: `a2658f09-…` (the loop). Reference clean job: `a2663182-…`.
 
 ## Human = "Father"
 

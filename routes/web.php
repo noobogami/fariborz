@@ -12,7 +12,9 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
 Route::get('/jobs/{id}', [DashboardController::class, 'show'])->name('jobs.show');
 Route::get('/humans', [HumanController::class, 'index'])->name('humans');
-Route::get('/tools', [OllamaController::class, 'index'])->name('tools');
+// Tools & Ollama moved under Settings; keep the old URL working as a redirect
+// straight to the Tools section anchor.
+Route::get('/tools', fn () => redirect()->to(route('settings').'#tools'))->name('tools');
 Route::get('/sandbox', [SandboxController::class, 'index'])->name('sandbox');
 Route::post('/sandbox/kill', [SandboxController::class, 'kill'])->name('sandbox.kill');
 Route::post('/sandbox/exec', [SandboxController::class, 'exec'])->name('sandbox.exec');

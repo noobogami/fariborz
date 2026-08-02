@@ -4,9 +4,9 @@ namespace App\Http\Controllers\Dashboard;
 
 use App\Application\Research\Browser\BrowserClient;
 use App\Application\Research\Browser\BrowserServiceException;
+use App\Application\Research\Llm\GatewayManager;
 use App\Application\Research\Ollama\OllamaManager;
 use App\Application\Research\Sandbox\SandboxClient;
-use App\Application\Research\Tools\ToolRegistry;
 use App\Http\Controllers\Controller;
 use App\Jobs\PullOllamaModelJob;
 use App\Models\CustomTool;
@@ -20,25 +20,8 @@ class OllamaController extends Controller
         private OllamaManager $ollama,
         private BrowserClient $browser,
         private SandboxClient $sandbox,
-        private ToolRegistry $registry,
+        private GatewayManager $gateway,
     ) {}
-
-    public function index()
-    {
-        return view('dashboard.tools', [
-            'status' => $this->ollama->status(),
-            'models' => $this->ollama->models(),
-            'running' => $this->ollama->running(),
-            'browser' => $this->browser->status(),
-            'sandbox' => $this->sandbox->status(),
-            'tools' => $this->registry->definitions(),
-            'skills' => CustomTool::latest()->get(),
-            'llmDriver' => config('research.llm.driver'),
-            'searchKeySet' => filled(config('services.tavily.key'))
-                || filled(config('services.brave.key'))
-                || filled(config('services.serpapi.key')),
-        ]);
-    }
 
     /** Toggle whether a saved skill is marked for promotion into the core. */
     public function promoteSkill(string $id): RedirectResponse
@@ -65,6 +48,7 @@ class OllamaController extends Controller
             'running' => $this->ollama->running(),
             'browser' => $this->browser->status(),
             'sandbox' => $this->sandbox->status(),
+            'gateway' => $this->gateway->status(),
         ]);
     }
 

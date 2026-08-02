@@ -57,6 +57,12 @@ class PlanTasksTool implements ControlTool
                                 'items' => ['type' => 'string'],
                                 'description' => 'File path(s) this task writes into the shared workspace (e.g. ["notes.md"]). A dependent task is told to read these.',
                             ],
+                            'tier' => [
+                                'type' => 'string',
+                                'description' => 'How hard THIS task is, which picks the model that runs it. One of: '
+                                    .implode(', ', $this->tierNames()).'. '.$this->tierHelp()
+                                    .' Omit for the default ('.$this->defaultTier().').',
+                            ],
                         ],
                         'required' => ['title', 'brief'],
                         'additionalProperties' => false,
@@ -96,6 +102,11 @@ class PlanTasksTool implements ControlTool
                 fn ($p) => $p !== ''
             ));
 
+            // Keep a tier only if it names a configured one; otherwise leave it
+            // null so the worker falls back to research.llm.default_tier.
+            $tier = trim((string) ($t['tier'] ?? ''));
+            $tier = isset($this->tiers()[$tier]) ? $tier : null;
+
             ResearchTask::create([
                 'research_job_id' => $jobId,
                 'seq' => $seq,
@@ -103,6 +114,7 @@ class PlanTasksTool implements ControlTool
                 'brief' => $brief,
                 'depends_on' => $deps,
                 'outputs' => $outputs ?: null,
+                'tier' => $tier,
             ]);
             $added[] = "#{$seq} {$title}".($deps ? ' (needs '.implode(',', array_map(fn ($d) => "#$d", $deps)).')' : ' (independent)');
         }
@@ -117,5 +129,33 @@ class PlanTasksTool implements ControlTool
             .'Your job now is to review each finished task and finish when all are Done.',
             ['added' => $added]
         );
+    }
+
+    /** @return array<string, array{model?:string, hint?:string}> */
+    private function tiers(): array
+    {
+        return (array) config('research.llm.tiers', []);
+    }
+
+    /** @return list<string> */
+    private function tierNames(): array
+    {
+        return array_keys($this->tiers());
+    }
+
+    private function defaultTier(): string
+    {
+        return (string) config('research.llm.default_tier', 'standard');
+    }
+
+    /** A one-line "name = when to use it" guide built from the configured tiers. */
+    private function tierHelp(): string
+    {
+        $parts = [];
+        foreach ($this->tiers() as $name => $meta) {
+            $parts[] = $name.' = '.trim((string) ($meta['hint'] ?? ''));
+        }
+
+        return implode('  ', $parts);
     }
 }

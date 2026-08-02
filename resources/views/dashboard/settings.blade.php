@@ -51,6 +51,7 @@
             runtime config · <span x-text="$store.settings.overrideCount"></span> overridden · <span x-text="$store.settings.dirtyCount"></span> unsaved · applies next iteration
         </div>
     </div>
+
     <div class="flex items-center" style="margin-left:auto;gap:8px;flex-wrap:wrap">
         <input x-model="$store.settings.query" placeholder="filter settings…" class="fz-mono"
                style="width:196px;padding:8px 11px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11.5px">
@@ -81,12 +82,10 @@
 </style>
 
 <div x-data>
-    <form id="settingsForm" method="POST" action="{{ route('settings.update') }}">
-        @csrf
-        <div class="set-cols">
+    <div class="set-cols">
 
-            {{-- section nav --}}
-            <nav class="set-nav">
+        {{-- section nav --}}
+        <nav class="set-nav">
                 <div class="fz-mono" style="font-size:9px;letter-spacing:.13em;color:#8a9499;padding:0 8px 9px">SECTIONS</div>
                 <div class="set-navlist">
                     <template x-for="n in $store.settings.nav" :key="n.id">
@@ -97,6 +96,14 @@
                             <span class="fz-mono" style="margin-left:auto;font-size:9.5px;flex:0 0 auto" :style="{ color: n.dirty ? '#f2b661' : '#6f797d' }" x-text="n.count"></span>
                         </a>
                     </template>
+
+                    {{-- operational section (not editable settings — lives below the config) --}}
+                    <div class="fz-mono" style="font-size:9px;letter-spacing:.13em;color:#8a9499;padding:11px 8px 7px">OPERATIONS</div>
+                    <a href="#tools" @click="$store.settings.active = 'tools'" class="flex items-center"
+                       style="gap:9px;padding:7px 9px;border-radius:9px;font-size:12.5px;text-decoration:none"
+                       :style="{ border: '1px solid '+($store.settings.active==='tools'?'rgba(234,99,140,.24)':'transparent'), background: $store.settings.active==='tools'?'linear-gradient(90deg,rgba(234,99,140,.16),rgba(234,99,140,.02))':'transparent', color: $store.settings.active==='tools'?'#ffd9da':'#98a2a7' }">
+                        <span>Tools &amp; Ollama</span>
+                    </a>
                 </div>
                 <div style="margin-top:14px;padding:11px;border-radius:11px;border:1px solid rgba(255,255,255,.07);background:#1a1f21;display:flex;flex-direction:column;gap:8px" class="fz-mono">
                     <div style="letter-spacing:.12em;color:#8a9499;font-size:9px">LEGEND</div>
@@ -108,6 +115,8 @@
 
             {{-- groups --}}
             <div class="set-main" :style="{ paddingBottom: $store.settings.dirty ? '58px' : '0' }">
+              <form id="settingsForm" method="POST" action="{{ route('settings.update') }}" style="display:flex;flex-direction:column;gap:18px">
+                @csrf
                 <template x-for="g in $store.settings.groups" :key="g.id">
                     <section :id="g.id" style="border-radius:14px;background:#1a1f21;overflow:hidden;scroll-margin-top:16px" :style="{ border: '1px solid '+g.bd }">
                         <div class="flex flex-wrap items-center" style="gap:11px;padding:13px 16px;border-bottom:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02)">
@@ -185,26 +194,29 @@
                 </template>
 
                 <div class="fz-mono" style="font-size:10.5px;line-height:1.75;color:#7c868a;padding:2px 2px 0">Empty a field to revert it to its .env / default. Secrets are stored encrypted. Changes apply to the next research iteration — no restart.</div>
+
+                {{-- sticky unsaved-changes bar --}}
+                <template x-if="$store.settings.dirty">
+                    <div style="position:sticky;bottom:0;left:0;right:0;z-index:5;padding:12px 0 4px;background:linear-gradient(180deg,rgba(16,20,22,0),rgba(16,20,22,.96) 42%);animation:barIn .2s ease both">
+                        <div class="flex flex-wrap items-center" style="gap:14px;padding:11px 15px;border-radius:12px;border:1px solid rgba(242,182,97,.3);background:linear-gradient(90deg,rgba(242,182,97,.09),#1c2124);box-shadow:0 18px 40px -22px rgba(0,0,0,.9)">
+                            <div style="width:7px;height:7px;border-radius:50%;background:#f2b661;animation:breathe 2s ease-in-out infinite"></div>
+                            <span class="fz-mono" style="font-size:11.5px;color:#f5c987" x-text="$store.settings.dirtyLabel"></span>
+                            <span class="fz-mono" style="font-size:10.5px;color:#8a9499;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="$store.settings.dirtyFields"></span>
+                            <div class="flex" style="margin-left:auto;gap:8px;flex:0 0 auto">
+                                <button type="button" @click="$store.settings.discard()" class="fz-mono" style="font-size:12px;letter-spacing:.03em;padding:8px 15px;border-radius:8px;border:1px solid rgba(255,255,255,.11);background:rgba(255,255,255,.03);color:#c8d0d3;cursor:pointer"
+                                        onmouseover="this.style.background='rgba(255,255,255,.08)';this.style.color='#fff'" onmouseout="this.style.background='rgba(255,255,255,.03)';this.style.color='#c8d0d3'">DISCARD</button>
+                                <button type="submit" class="fz-mono" style="font-size:12px;font-weight:600;letter-spacing:.03em;padding:8px 17px;border-radius:8px;border:1px solid rgba(255,217,218,.35);background:linear-gradient(145deg,#ea638c,#89023e);color:#fff;cursor:pointer;box-shadow:0 10px 26px -14px rgba(234,99,140,.9)"
+                                        onmouseover="this.style.filter='brightness(1.12)'" onmouseout="this.style.filter='none'">SAVE CHANGES</button>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+              </form>
+
+              {{-- ── Ollama & Tools (operational, non-editable) ─────────────── --}}
+              @include('dashboard.partials.tools')
             </div>
         </div>
-
-        {{-- sticky unsaved-changes bar --}}
-        <template x-if="$store.settings.dirty">
-            <div style="position:sticky;bottom:0;left:0;right:0;z-index:5;padding:12px 0 4px;background:linear-gradient(180deg,rgba(16,20,22,0),rgba(16,20,22,.96) 42%);animation:barIn .2s ease both">
-                <div class="flex flex-wrap items-center" style="gap:14px;padding:11px 15px;border-radius:12px;border:1px solid rgba(242,182,97,.3);background:linear-gradient(90deg,rgba(242,182,97,.09),#1c2124);box-shadow:0 18px 40px -22px rgba(0,0,0,.9)">
-                    <div style="width:7px;height:7px;border-radius:50%;background:#f2b661;animation:breathe 2s ease-in-out infinite"></div>
-                    <span class="fz-mono" style="font-size:11.5px;color:#f5c987" x-text="$store.settings.dirtyLabel"></span>
-                    <span class="fz-mono" style="font-size:10.5px;color:#8a9499;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="$store.settings.dirtyFields"></span>
-                    <div class="flex" style="margin-left:auto;gap:8px;flex:0 0 auto">
-                        <button type="button" @click="$store.settings.discard()" class="fz-mono" style="font-size:12px;letter-spacing:.03em;padding:8px 15px;border-radius:8px;border:1px solid rgba(255,255,255,.11);background:rgba(255,255,255,.03);color:#c8d0d3;cursor:pointer"
-                                onmouseover="this.style.background='rgba(255,255,255,.08)';this.style.color='#fff'" onmouseout="this.style.background='rgba(255,255,255,.03)';this.style.color='#c8d0d3'">DISCARD</button>
-                        <button type="submit" class="fz-mono" style="font-size:12px;font-weight:600;letter-spacing:.03em;padding:8px 17px;border-radius:8px;border:1px solid rgba(255,217,218,.35);background:linear-gradient(145deg,#ea638c,#89023e);color:#fff;cursor:pointer;box-shadow:0 10px 26px -14px rgba(234,99,140,.9)"
-                                onmouseover="this.style.filter='brightness(1.12)'" onmouseout="this.style.filter='none'">SAVE CHANGES</button>
-                    </div>
-                </div>
-            </div>
-        </template>
-    </form>
 </div>
 
 @push('scripts')

@@ -1,0 +1,79 @@
+# LiteLLM gateway — the self-hosted router in front of every model.
+#
+# The app (driver = openai_compatible) sends ONE model name; LiteLLM maps it to a
+# backend below. Local models (ollama) run fully OFFLINE. Cloud models activate
+# only when the machine is online AND the matching provider key is set in the
+# gateway's environment (see docker-compose: litellm service). A cloud model with
+# no key simply fails that one call — it never affects the local models.
+#
+# Wire these names to capability tiers in the app's Settings (or via env
+# RESEARCH_LLM_TIER_*): e.g. light -> local-fast, standard -> local-standard,
+# hard -> local-hard (offline), or point a tier at gpt-4o / claude / gemini /
+# deepseek to burst a hard task to the cloud when online.
+#
+# Add a model = add a `- model_name:` block. Change which local tag a tier uses =
+# edit its `model:` (must be a tag you've `ollama pull`ed). No app change needed.
+
+model_list:
+  # ── Local, offline (Ollama) ────────────────────────────────────────────────
+  # `think` is baked into the TIER: the supervisor tags each task with a tier,
+  # the tier maps to one of these model names, and thinking rides along with it.
+  # Thinking is ~50x slower but MATTERS for correctness on a weak model: without
+  # it, qwen3:8b botches the response ENVELOPE on complex decisions (emits the
+  # tool's args with no {"action":"tool",...} wrapper) and the job fails. So keep
+  # thinking ON for standard (the default / supervisor / most work) and hard, and
+  # OFF only for `light` — genuinely trivial, mechanical tasks. qwen3 puts thinking
+  # on a separate channel, so the JSON answer stays clean either way.
+  - model_name: local-fast
+    litellm_params:
+      model: ollama_chat/qwen3:1.7b
+      api_base: os.environ/OLLAMA_BASE_URL
+      think: false
+  - model_name: local-standard
+    litellm_params:
+      model: ollama_chat/qwen3:8b
+      api_base: os.environ/OLLAMA_BASE_URL
+      think: true
+  - model_name: local-hard
+    litellm_params:
+      model: ollama_chat/qwen3:32b
+      api_base: os.environ/OLLAMA_BASE_URL
+      think: true
+
+  # ── Cloud (used only when online + the provider key is set) ─────────────────
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-latest
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gemini
+    litellm_params:
+      model: gemini/gemini-1.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: gemini-flash
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: deepseek
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+litellm_settings:
+  # Silently drop params a given backend doesn't support (e.g. some local models
+  # ignore max_tokens/temperature) instead of erroring the call.
+  drop_params: true
+
+# NOTE on auth: do NOT set general_settings.master_key here. LiteLLM reads the
+# LITELLM_MASTER_KEY environment variable on its own — set it (compose / .env) to
+# REQUIRE a Bearer token and mirror it into the app's "Gateway key" setting; leave
+# it empty to run keyless on a trusted local network. (Pinning master_key to
+# os.environ/LITELLM_MASTER_KEY here would enable auth even when the var is empty,
+# locking everyone out with an unknown key.)

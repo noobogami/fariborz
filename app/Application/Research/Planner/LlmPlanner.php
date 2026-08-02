@@ -25,10 +25,15 @@ class LlmPlanner implements Planner
         private PromptBuilder $prompts,
         private ToolRegistry $registry,
         private TraceRecorder $trace,
+        private ModelRouter $router,
     ) {}
 
     public function decide(ResearchContext $ctx): Decision
     {
+        // Pin the model for this turn from the job's capability tier (per-task
+        // routing) before we build the prompt or call the LLM.
+        $this->router->apply($ctx->job);
+
         $system = $this->prompts->system($ctx);
         $messages = array_merge($ctx->messages, [
             ['role' => 'user', 'content' => $this->prompts->stateUser($ctx)],
@@ -51,6 +56,8 @@ class LlmPlanner implements Planner
 
     public function summarizeBestEffort(ResearchContext $ctx, string $reason): string
     {
+        $this->router->apply($ctx->job);
+
         $system = $this->prompts->system($ctx);
         $messages = array_merge($ctx->messages, [
             ['role' => 'user', 'content' => $this->prompts->bestEffort($reason)],
@@ -174,7 +181,10 @@ class LlmPlanner implements Planner
 
     private function llmPayload(string $system, array $messages, string $raw): array
     {
-        $payload = ['model' => config('research.llm.model')];
+        $payload = [
+            'model' => config('research.llm.model'),
+            'tier' => config('research.llm.active_tier'),
+        ];
 
         if (config('research.trace.store_prompts')) {
             $payload['system'] = $system;

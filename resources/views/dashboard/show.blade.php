@@ -290,6 +290,11 @@
                                         <span class="fz-mono" style="font-size:12px;flex:0 0 auto" :style="{ color: s.tone.toolFg }" x-text="s.tool"></span>
                                         <span style="font-size:12.5px;color:#98a2a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0" x-text="s.outcome"></span>
                                         <span class="flex items-center" style="margin-left:auto;gap:10px;flex:0 0 auto">
+                                            <template x-if="s.model">
+                                                <span class="fz-mono" :title="s.model + (s.tier ? '  ·  tier: ' + s.tier : '')"
+                                                      style="font-size:9px;letter-spacing:.04em;padding:2px 8px;border-radius:20px;background:rgba(234,99,140,.1);border:1px solid rgba(234,99,140,.22);color:#ffb3c4;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                                                      x-text="(s.tier ? s.tier.toUpperCase() + ' · ' : '') + s.modelShort"></span>
+                                            </template>
                                             <span class="fz-mono" style="font-size:9.5px;letter-spacing:.07em;padding:2px 8px;border-radius:20px" :style="{ background: s.tone.chipBg, color: s.tone.chipFg, border: '1px solid '+s.tone.chipBd }" x-text="s.status"></span>
                                             <span class="fz-mono" style="font-size:10.5px;color:#8a9499;width:52px;text-align:right" x-text="s.dur"></span>
                                             <span class="fz-mono" style="font-size:10px;color:#4d565b;width:10px" x-text="open[s.id] ? '▴' : '▾'"></span>
@@ -678,6 +683,13 @@ function jobDetail() {
         get answeredQuestions() { return this.questions.filter(q => !['queued','asked'].includes(q.status)); },
 
         // ── timeline (summary + detailed) ───────────────────────────────────
+        // The last path segment of a model slug — "anthropic/claude-3.5-sonnet"
+        // → "claude-3.5-sonnet"; "qwen3:8b" and other unslashed ids pass through.
+        shortModel(m) {
+            if (!m) return '';
+            const parts = String(m).split('/');
+            return parts[parts.length - 1];
+        },
         iconFor(tool) {
             if (/search/.test(tool)) return '🔍';
             if (/read|webpage|fetch/.test(tool)) return '📄';
@@ -743,7 +755,9 @@ function jobDetail() {
                 const seq = Math.max(...evs.map(e => e.seq || 0));
                 if (isLive && seq === lastSeq && key !== 'err') key = 'live';
                 return { id: primary.id, iteration: iter, glyph, tool, outcome, summary: outcome || primary.summary || '',
-                         status: STATUS[key], dur: this.fmtDur(primary.duration_ms), tone: TONES[key], _key: key, isTool, seq };
+                         status: STATUS[key], dur: this.fmtDur(primary.duration_ms), tone: TONES[key], _key: key, isTool, seq,
+                         model: thought?.meta?.model || null, tier: thought?.meta?.tier || null,
+                         modelShort: this.shortModel(thought?.meta?.model) };
             });
 
             // Merge and show newest-first (by event order).

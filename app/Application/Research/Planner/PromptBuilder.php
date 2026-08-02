@@ -29,6 +29,7 @@ class PromptBuilder
     {
         $tools = json_encode($ctx->toolDefs, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $today = now()->format('l, j F Y');
+        $tiers = $this->tierGuidance();
 
         return <<<PROMPT
         You are a SUPERVISOR — the project manager for ONE goal. You do NOT do the
@@ -76,6 +77,7 @@ class PromptBuilder
            For a goal that must be SERVED/DEPLOYED, include explicit final tasks: "assemble all
            files" then "start the server on a published port and verify it responds". Call
            plan_tasks once up front; call again only to add or fix tasks.
+           {$tiers}
         2. review_task — whenever a task is awaiting review, VERIFY it: read_file / list_files
            its actual output FIRST, then accept only if it truly satisfies the brief (right
            length, real content, NO leftover scaffolding like "CURRENT STATE"/JSON, server
@@ -108,6 +110,31 @@ class PromptBuilder
         AVAILABLE TOOLS:
         {$tools}
         PROMPT;
+    }
+
+    /**
+     * A compact "which model tier to give each task" guide for the plan_tasks
+     * step, built from config('research.llm.tiers'). Each task carries a `tier`
+     * that selects the model the worker runs on — so the supervisor decides the
+     * model per task (by difficulty) without any role→model hardcoding.
+     */
+    private function tierGuidance(): string
+    {
+        $tiers = (array) config('research.llm.tiers', []);
+        if (empty($tiers)) {
+            return '';
+        }
+
+        $default = (string) config('research.llm.default_tier', 'standard');
+        $lines = [];
+        foreach ($tiers as $name => $meta) {
+            $lines[] = "  - {$name}: ".trim((string) ($meta['hint'] ?? ''));
+        }
+
+        return "For EACH task also set a \"tier\" — how hard the task is — which picks the model that\n"
+            ."           runs it. Match the tier to the work; do not default everything to the strongest.\n"
+            .implode("\n", $lines)."\n"
+            ."           Omit \"tier\" to use the default ({$default}).";
     }
 
     private function workerSystem(ResearchContext $ctx): string

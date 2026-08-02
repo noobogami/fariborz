@@ -2,6 +2,7 @@
 
 namespace App\Application\Research\Tracing;
 
+use App\Domain\Research\Enums\EventType;
 use App\Models\ResearchJob;
 
 /**
@@ -17,7 +18,7 @@ class ResearchTraceReader
      * @return array{
      *   job: array,
      *   stats: array,
-     *   timeline: array<int, array{seq:int, iteration:int, type:string, glyph:string, level:string, summary:string, at:string, duration_ms:?int, payload:?array}>
+     *   timeline: array<int, array{seq:int, iteration:int, type:string, glyph:string, level:string, summary:string, at:string, duration_ms:?int, meta:?array, payload:?array}>
      * }
      */
     public function build(string $jobId, bool $withPayloads = false): array
@@ -34,6 +35,7 @@ class ResearchTraceReader
             'summary' => $e->summary,
             'at' => optional($e->occurred_at)->toDateTimeString(),
             'duration_ms' => $e->duration_ms,
+            'meta' => $this->turnMeta($e),
             'payload' => $withPayloads ? $e->payload : null,
         ])->all();
 
@@ -42,6 +44,28 @@ class ResearchTraceReader
             'stats' => $this->stats($job),
             'timeline' => $timeline,
         ];
+    }
+
+    /**
+     * The model (and capability tier) that produced this turn — always surfaced,
+     * even when full payloads are withheld, so the flow can show "which model
+     * handled each step". Only LLM-decision events carry it.
+     *
+     * @return array{model:string, tier:?string}|null
+     */
+    private function turnMeta($event): ?array
+    {
+        if ($event->type !== EventType::Thought) {
+            return null;
+        }
+
+        $payload = $event->payload ?? [];
+        $model = $payload['model'] ?? null;
+        if (! is_string($model) || $model === '') {
+            return null;
+        }
+
+        return ['model' => $model, 'tier' => $payload['tier'] ?? null];
     }
 
     private function jobHeader(ResearchJob $job): array

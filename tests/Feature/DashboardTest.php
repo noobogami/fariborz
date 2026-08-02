@@ -67,14 +67,20 @@ class DashboardTest extends TestCase
             ->assertDontSee('DONE question here');
     }
 
-    public function test_tools_page_renders_with_ollama_and_tool_catalogue(): void
+    public function test_tools_and_ollama_render_under_settings(): void
     {
-        $this->get('/tools')->assertOk()
+        // Tools & Ollama is now a tab inside Settings; its markup renders on the page.
+        $this->get('/settings')->assertOk()
             ->assertSee('Ollama')
             ->assertSee('Browser')          // Playwright service card
             ->assertSee('browser_search')   // keyless search tool
             ->assertSee('wikipedia')        // a registered keyless tool
             ->assertSee('qwen3:30b');       // faked installed model
+    }
+
+    public function test_old_tools_url_redirects_to_settings(): void
+    {
+        $this->get('/tools')->assertRedirect(route('settings').'#tools');
     }
 
     public function test_browser_search_test_endpoint_returns_results(): void

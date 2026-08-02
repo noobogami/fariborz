@@ -26,6 +26,7 @@ use App\Events\ResearchCompleted;
 use App\Events\ResearchFailed;
 use App\Infrastructure\Research\Llm\AnthropicClient;
 use App\Infrastructure\Research\Llm\OllamaClient;
+use App\Infrastructure\Research\Llm\OpenAiCompatibleClient;
 use App\Infrastructure\Research\Persistence\EloquentHumanQuestionRepository;
 use App\Infrastructure\Research\Persistence\EloquentMemoryRepository;
 use App\Infrastructure\Research\Persistence\EloquentResearchJobRepository;
@@ -130,6 +131,7 @@ class ResearchServiceProvider extends ServiceProvider
         $this->app->bind(LlmClient::class, fn ($app) => match (config('research.llm.driver')) {
             'ollama' => $app->make(OllamaClient::class),
             'anthropic' => $app->make(AnthropicClient::class),
+            'openai_compatible' => $app->make(OpenAiCompatibleClient::class),
             default => throw new \InvalidArgumentException(
                 'Unknown research.llm.driver: '.config('research.llm.driver')
             ),

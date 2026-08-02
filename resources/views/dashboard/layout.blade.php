@@ -57,9 +57,8 @@
     $nav = [
         ['label' => 'Jobs',            'code' => 'JB', 'route' => 'dashboard', 'active' => in_array($r, ['dashboard', 'jobs.show']), 'badge' => $activeJobs, 'badgeStyle' => 'accent'],
         ['label' => config('research.human.name', 'Human') . ' Q&A', 'code' => 'QA', 'route' => 'humans', 'active' => $r === 'humans', 'badge' => $openQ, 'badgeStyle' => 'pill'],
-        ['label' => 'Tools & Ollama',  'code' => 'TO', 'route' => 'tools',    'active' => $r === 'tools',    'badge' => null],
         ['label' => 'Sandbox',         'code' => 'SB', 'route' => 'sandbox',  'active' => $r === 'sandbox',  'badge' => null],
-        ['label' => 'Settings',        'code' => 'ST', 'route' => 'settings', 'active' => $r === 'settings', 'badge' => null],
+        ['label' => 'Settings',        'code' => 'ST', 'route' => 'settings', 'active' => in_array($r, ['settings', 'tools']), 'badge' => null],
     ];
 @endphp
 

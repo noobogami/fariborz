@@ -40,13 +40,25 @@ x-app-env: &app-env
   RESEARCH_QUEUE_NAME: ${RESEARCH_QUEUE_NAME:-research}
   CACHE_STORE: redis
   SESSION_DRIVER: file
-  # Offline LLM by default — talks to the ollama service below.
+  # Offline LLM by default. On macOS/Windows run Ollama NATIVELY (GPU-accelerated;
+  # a dockerized Ollama is CPU-only) and reach it on the host via
+  # host.docker.internal — set `launchctl setenv OLLAMA_HOST "0.0.0.0:11434"`
+  # (mac) so the host daemon accepts connections from the container network.
+  # To run Ollama IN Docker instead: `docker compose --profile ollama-docker up`
+  # and change this back to http://ollama:11434.
   RESEARCH_LLM_DRIVER: ${RESEARCH_LLM_DRIVER:-ollama}
   RESEARCH_LLM_MODEL: ${RESEARCH_LLM_MODEL:-qwen3:30b}
-  OLLAMA_BASE_URL: http://ollama:11434
+  # Hardcoded (like DB_HOST/REDIS_HOST) so .env's localhost value can't leak into
+  # the container. Change to http://ollama:11434 if you use --profile ollama-docker.
+  OLLAMA_BASE_URL: http://host.docker.internal:11434
   OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
   OLLAMA_THINK: ${OLLAMA_THINK:-false}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # LiteLLM gateway (driver = openai_compatible) — routes to local Ollama AND
+  # cloud providers. In-network address; the app's own key mirrors the master key.
+  LLM_GATEWAY_URL: http://litellm:4000/v1
+  # Must equal the gateway's LITELLM_MASTER_KEY (derived from the same var below).
+  LLM_GATEWAY_KEY: ${LITELLM_MASTER_KEY:-sk-fariborz-local}
   # Headless-browser microservice (free web search + page extraction, no API key).
   BROWSER_SERVICE_URL: http://browser:3000
   # Isolated code sandbox (write files + run commands to build/test apps).
@@ -60,6 +72,10 @@ x-app-build: &app-build
     - .:/var/www/html
     - vendor:/var/www/html/vendor          # keep container-built vendor over the bind mount
   environment: *app-env
+  # Reach a NATIVE Ollama running on the host (host-gateway makes
+  # host.docker.internal resolve on Linux too; a no-op on Docker Desktop).
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
 
 services:
   mysql:
@@ -100,8 +116,14 @@ services:
       timeout: 3s
       retries: 10
 
+  # OPTIONAL dockerized Ollama. OFF by default — on macOS/Windows run Ollama
+  # natively for GPU acceleration (the app reaches it via host.docker.internal).
+  # Start this only on Linux or if you specifically want it in a container:
+  #   docker compose --profile ollama-docker up -d
+  # and set OLLAMA_BASE_URL=http://ollama:11434 in your .env.
   ollama:
     image: ollama/ollama:latest
+    profiles: ["ollama-docker"]
     volumes:
       - ollama:/root/.ollama               # persists pulled models
     ports:
@@ -161,11 +183,40 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # One-shot pull of the local model. Run once:
-  #   docker compose --profile setup run --rm ollama-pull
+  # Self-hosted LLM ROUTER (OpenAI-compatible). Fronts local Ollama AND cloud
+  # providers behind one endpoint; the app selects a backend per task by model
+  # name (see services/litellm/config.yaml). Cloud models activate only when
+  # online and their provider key is set below — local models always work offline.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    volumes:
+      - ./services/litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      # Reach a NATIVE host Ollama (GPU-accelerated) by default. Change to
+      # http://ollama:11434 if you run Ollama via --profile ollama-docker.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Cloud provider keys — set the ones you want; leave blank to stay local.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # The gateway's Bearer token. Defaults to a local dev key (LiteLLM enforces
+      # auth once this is set; the app authenticates with the same value above).
+      # Override with your own sk-… in .env for anything beyond local dev.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-fariborz-local}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # One-shot pull into the DOCKERIZED Ollama (only relevant with --profile
+  # ollama-docker). With native Ollama, pull on the host: `ollama pull <model>`.
+  #   docker compose --profile ollama-docker run --rm ollama-pull
   ollama-pull:
     image: ollama/ollama:latest
-    profiles: ["setup"]
+    profiles: ["ollama-docker"]
     depends_on:
       ollama:
         condition: service_healthy

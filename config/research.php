@@ -65,16 +65,75 @@ return [
     |--------------------------------------------------------------------------
     */
     'llm' => [
-        // 'anthropic' (cloud) or 'ollama' (fully local/offline).
-        'driver' => env('RESEARCH_LLM_DRIVER', 'anthropic'),
-        // For anthropic: a model id like "claude-opus-4-8".
-        // For ollama:    a pulled model tag like "llama3.1" or "qwen2.5".
+        // 'ollama' (fully local/offline), 'anthropic' (direct cloud), or
+        // 'openai_compatible' (a self-hosted gateway like LiteLLM that routes to
+        // BOTH local models and cloud providers — the recommended way to mix
+        // offline + cloud models per task).
+        'driver' => env('RESEARCH_LLM_DRIVER', 'ollama'),
+        // The DEFAULT model, used when no tier override applies.
+        //   ollama:            a pulled tag like "qwen3:8b".
+        //   anthropic:         a model id like "claude-opus-4-8".
+        //   openai_compatible: whatever the gateway calls the model. With the
+        //                      shipped LiteLLM config these are "local-standard",
+        //                      "local-fast", "local-hard", "gpt-4o", "claude",
+        //                      "gemini", "deepseek", … (see services/litellm).
         'model' => env('RESEARCH_LLM_MODEL', 'claude-opus-4-8'),
         'max_tokens' => env('RESEARCH_LLM_MAX_TOKENS', 4096),
         'temperature' => env('RESEARCH_LLM_TEMPERATURE', 0.2),
         // Keep at most this many transcript messages verbatim; older ones get summarized.
         // Lower this for local models with small context windows.
         'transcript_window' => env('RESEARCH_TRANSCRIPT_WINDOW', 40),
+
+        /*
+        | Capability tiers — per-task model routing WITHOUT hardcoding a model
+        | per role. The supervisor tags each task it plans with a tier (a bounded
+        | decision the LLM is good at — "how hard is THIS task?"); the worker for
+        | that task then runs on the tier's model. Solo jobs and the supervisor's
+        | own planning/review turns use `default_tier`.
+        |
+        | A tier whose `model` is EMPTY falls back to `research.llm.model` above —
+        | so with every tier blank the system behaves exactly as before (single
+        | model). Set a tier's model to take over routing: with the LiteLLM gateway
+        | (driver = openai_compatible) that's a gateway model name — a LOCAL model
+        | for `light` (e.g. `local-fast`) and a CLOUD one for `hard` (e.g. `claude`)
+        | mixes offline + cloud per task. With driver = ollama they're Ollama tags.
+        */
+        'tiers' => [
+            'light' => [
+                'model' => env('RESEARCH_LLM_TIER_LIGHT', ''),
+                'hint' => 'Simple, mechanical, low-stakes work: scaffolding files, formatting, trivial edits, short factual lookups. Fastest & cheapest.',
+            ],
+            'standard' => [
+                'model' => env('RESEARCH_LLM_TIER_STANDARD', ''),
+                'hint' => 'The default. Most build & research tasks: implement a feature, write a page/section, summarize a handful of sources.',
+            ],
+            'hard' => [
+                'model' => env('RESEARCH_LLM_TIER_HARD', ''),
+                'hint' => 'Complex reasoning: architecture, tricky multi-file logic, subtle debugging, careful review, or long-form writing. Strongest & most expensive.',
+            ],
+        ],
+        // Tier used when a task has none, and for solo/supervisor turns.
+        'default_tier' => env('RESEARCH_LLM_DEFAULT_TIER', 'standard'),
+
+        // OpenAI-compatible gateway (used when driver = openai_compatible). Point
+        // base_url at a self-hosted LiteLLM proxy (default below — routes to local
+        // Ollama AND cloud providers), or at LocalAI / vLLM / OpenRouter. Provider
+        // API keys (OpenAI/Anthropic/Gemini/DeepSeek) live in the GATEWAY's env,
+        // not here — the app only holds the gateway's own key (services.
+        // openai_compatible.key), which may be blank for a keyless local gateway.
+        'openai_compatible' => [
+            // In Docker this is http://litellm:4000/v1; natively the published port.
+            'base_url' => env('LLM_GATEWAY_URL', 'http://localhost:4000/v1'),
+            'request_timeout' => env('LLM_GATEWAY_TIMEOUT', 600), // local models can be slow
+            // Constrain output to a JSON object (response_format=json_object). The
+            // agent ALWAYS expects a JSON decision, and weak local models are
+            // unreliable at "JSON only" without it — LiteLLM maps this to Ollama's
+            // format:json. Disable only for an endpoint that rejects the param.
+            'force_json' => env('LLM_GATEWAY_FORCE_JSON', true),
+            // Optional attribution headers — used by OpenRouter, ignored elsewhere.
+            'referer' => env('LLM_GATEWAY_REFERER', ''),
+            'title' => env('LLM_GATEWAY_TITLE', 'Fariborz'),
+        ],
 
         // Local, offline inference via Ollama (used when driver = ollama).
         'ollama' => [

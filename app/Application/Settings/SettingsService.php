@@ -27,18 +27,26 @@ class SettingsService
     {
         return [
             'LLM' => [
-                ['key' => 'research.llm.driver', 'label' => 'Driver', 'type' => 'select', 'options' => ['ollama', 'anthropic'], 'help' => 'ollama = local/offline, anthropic = cloud'],
-                ['key' => 'research.llm.model', 'label' => 'Model', 'type' => 'string', 'help' => 'e.g. qwen3:8b (ollama) or claude-opus-4-8 (anthropic)'],
+                ['key' => 'research.llm.driver', 'label' => 'Driver', 'type' => 'select', 'options' => ['ollama', 'anthropic', 'openai_compatible'], 'help' => 'ollama = local/offline direct · anthropic = cloud direct · openai_compatible = a gateway (LiteLLM) that routes to local + cloud'],
+                ['key' => 'research.llm.model', 'label' => 'Default model', 'type' => 'string', 'help' => 'Used when no tier overrides it. e.g. qwen3:8b (ollama), claude-opus-4-8 (anthropic), or a gateway model name like local-standard / gpt-4o (openai_compatible)'],
                 ['key' => 'research.llm.temperature', 'label' => 'Temperature', 'type' => 'float'],
                 ['key' => 'research.llm.max_tokens', 'label' => 'Max tokens', 'type' => 'int'],
                 ['key' => 'research.llm.transcript_window', 'label' => 'Transcript window', 'type' => 'int', 'help' => 'Messages kept verbatim before summarizing'],
             ],
+            'Model tiers — per-task routing (leave blank to use the default model)' => $this->tierFields(),
             'Cloud LLM — Anthropic' => [
                 ['key' => 'services.anthropic.key', 'label' => 'Anthropic API key', 'type' => 'string', 'secret' => true],
+            ],
+            'Gateway — LiteLLM / OpenAI-compatible (routes to local + cloud)' => [
+                ['key' => 'research.llm.openai_compatible.base_url', 'label' => 'Gateway URL', 'type' => 'string', 'help' => 'Self-hosted LiteLLM (routes to Ollama + cloud), LocalAI, vLLM, or OpenRouter. e.g. http://localhost:4000/v1'],
+                ['key' => 'services.openai_compatible.key', 'label' => 'Gateway key', 'type' => 'string', 'secret' => true, 'help' => 'The gateway\'s own key (e.g. LiteLLM master key). Blank for a keyless local gateway. Provider keys live in the gateway, not here.'],
+                ['key' => 'research.llm.openai_compatible.referer', 'label' => 'Attribution URL (OpenRouter only)', 'type' => 'string', 'help' => 'Ignored by LiteLLM/LocalAI; may be blank'],
+                ['key' => 'research.llm.openai_compatible.title', 'label' => 'Attribution title (OpenRouter only)', 'type' => 'string'],
             ],
             'Local LLM — Ollama' => [
                 ['key' => 'research.llm.ollama.base_url', 'label' => 'Ollama URL', 'type' => 'string', 'help' => 'e.g. http://localhost:11434'],
                 ['key' => 'research.llm.ollama.num_ctx', 'label' => 'Context tokens', 'type' => 'int'],
+                ['key' => 'research.llm.ollama.keep_alive', 'label' => 'Keep-alive', 'type' => 'string', 'help' => 'How long Ollama keeps the model loaded between turns, e.g. 30m, 1h, or -1 to keep it resident'],
                 ['key' => 'research.llm.ollama.think', 'label' => 'Thinking (reasoning models)', 'type' => 'bool', 'help' => 'Off = return JSON only (recommended)'],
                 ['key' => 'research.llm.ollama.force_json', 'label' => 'Force JSON output', 'type' => 'bool'],
             ],
@@ -62,6 +70,34 @@ class SettingsService
                 ['key' => 'research.limits.max_parse_failures', 'label' => 'Max invalid LLM responses', 'type' => 'int'],
             ],
         ];
+    }
+
+    /**
+     * The per-task routing fields, derived from config('research.llm.tiers') so
+     * they always match the tiers the planner offers. One model box per tier
+     * (blank = fall back to the default model), plus which tier to use by default.
+     */
+    private function tierFields(): array
+    {
+        $tiers = (array) config('research.llm.tiers', []);
+        $names = array_keys($tiers);
+
+        $fields = [[
+            'key' => 'research.llm.default_tier', 'label' => 'Default tier', 'type' => 'select',
+            'options' => $names ?: ['standard'],
+            'help' => 'Tier for solo jobs and a supervisor\'s own turns, and for tasks left untagged',
+        ]];
+
+        foreach ($tiers as $name => $meta) {
+            $fields[] = [
+                'key' => "research.llm.tiers.$name.model",
+                'label' => ucfirst($name).' tier model',
+                'type' => 'string',
+                'help' => trim((string) ($meta['hint'] ?? '')).' — blank = default model; gateway names e.g. local-fast, local-hard, gpt-4o, claude',
+            ];
+        }
+
+        return $fields;
     }
 
     /** Flatten the schema keyed by config path. */

@@ -65,6 +65,13 @@ class StartResearch
             'allowed_tools' => null,
         ];
 
+        // Carry the task's capability tier so this sub-agent runs on the model the
+        // supervisor chose for it (per-task routing; see ModelRouter). Absent =
+        // the sub-agent falls back to research.llm.default_tier.
+        if (! empty($task->tier)) {
+            $config['tier'] = $task->tier;
+        }
+
         $child = $this->jobs->create($goal, $config, $role, $parent->id);
         $this->memory->seedGoal($child);
 
