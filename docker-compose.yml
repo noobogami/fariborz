@@ -207,8 +207,37 @@ services:
       # auth once this is set; the app authenticates with the same value above).
       # Override with your own sk-… in .env for anything beyond local dev.
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-fariborz-local}
+      # ── Admin UI + DB-backed model management (http://localhost:4000/ui) ──────
+      # LiteLLM stores models/keys/spend in Postgres; store_model_in_db (config.yaml)
+      # makes models you add in the UI get served alongside the file-defined ones.
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:-litellm}@litellm-db:5432/litellm
+      # UI login — CHANGE THESE. (You can also sign in with the master key above.)
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:-admin}
+      # Encrypts provider API keys you save via the UI into the DB. Set your own.
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-sk-salt-fariborz-local}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Postgres backing the LiteLLM admin UI + DB-backed model management (keys,
+  # models, spend). Only the gateway uses it — the app keeps using MySQL.
+  litellm-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD:-litellm}
+    volumes:
+      - litellm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
     restart: unless-stopped
 
   # One-shot pull into the DOCKERIZED Ollama (only relevant with --profile
@@ -273,6 +302,7 @@ volumes:
   mysqldata:
   redisdata:
   ollama:
+  litellm_pgdata:
   vendor:
   sandbox_workspace:
   sandbox_cargo:

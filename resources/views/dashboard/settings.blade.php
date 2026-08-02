@@ -169,6 +169,21 @@
                                         </div>
                                     </template>
 
+                                    {{-- dropdown (dynamic model list from the LiteLLM gateway) --}}
+                                    <template x-if="f.control === 'select'">
+                                        <div style="position:relative;flex:1;min-width:0">
+                                            <select @change="$store.settings.set(f, $event.target.value)" x-effect="$el.value = $store.settings.cur(f)" class="fz-mono"
+                                                    style="width:100%;padding:8px 30px 8px 11px;border-radius:8px;background:#101416;font-size:11.5px;appearance:none;-webkit-appearance:none;cursor:pointer"
+                                                    :style="{ border: '1px solid '+(f.edited?'rgba(242,182,97,.4)':'rgba(255,255,255,.1)'), color: f.edited?'#f7e2c2':'#e4e9ea' }">
+                                                <template x-for="o in f.options" :key="o">
+                                                    <option :value="o" x-text="o==='' ? '— use default model —' : o" style="background:#101416;color:#e4e9ea"></option>
+                                                </template>
+                                            </select>
+                                            <span class="fz-mono" style="position:absolute;right:11px;top:50%;transform:translateY(-50%);pointer-events:none;font-size:9px;color:#8a9499">▾</span>
+                                            <template x-if="f.edited"><input type="hidden" :name="'settings['+f.key+']'" :value="$store.settings.cur(f)"></template>
+                                        </div>
+                                    </template>
+
                                     {{-- boolean toggle (always submitted) --}}
                                     <template x-if="f.control === 'bool'">
                                         <div class="flex items-center" style="gap:10px">

@@ -85,3 +85,9 @@ litellm_settings:
 # it empty to run keyless on a trusted local network. (Pinning master_key to
 # os.environ/LITELLM_MASTER_KEY here would enable auth even when the var is empty,
 # locking everyone out with an unknown key.)
+
+general_settings:
+  # Serve models added at runtime via the admin UI (http://localhost:4000/ui) /
+  # the /model/* API, stored in Postgres, ALONGSIDE the file-defined ones above.
+  # Requires DATABASE_URL (set on the litellm service in docker-compose).
+  store_model_in_db: true

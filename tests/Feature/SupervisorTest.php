@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Application\Research\ResearchOrchestrator;
+use App\Application\Research\Sandbox\SandboxClient;
 use App\Application\Research\StartResearch;
 use App\Application\Research\Tools\ToolRegistry;
 use App\Domain\Research\Contracts\LlmClient;
@@ -12,12 +13,14 @@ use App\Domain\Research\Enums\TaskStatus;
 use App\Domain\Research\ValueObjects\ResearchContext;
 use App\Domain\Research\ValueObjects\ToolArguments;
 use App\Events\ResearchCompleted;
+use App\Infrastructure\Research\Tools\ReviewTaskTool;
 use App\Jobs\AdvanceResearchJob;
 use App\Listeners\ResumeSupervisorOnChildDone;
 use App\Models\ResearchJob;
 use App\Models\ResearchTask;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\Support\FakeLlmClient;
 use Tests\TestCase;
@@ -223,6 +226,72 @@ class SupervisorTest extends TestCase
         $task->refresh();
         $this->assertSame(TaskStatus::Pending, $task->status);
         $this->assertStringContainsString('too short', $task->brief);
+    }
+
+    public function test_accept_is_blocked_when_a_declared_output_is_missing(): void
+    {
+        // Sandbox reports the file isn't there (404) — the deliverable was never written.
+        Http::fake(['*/read*' => Http::response(['error' => 'ENOENT'], 404)]);
+
+        $job = $this->supervisor();
+        $task = ResearchTask::create([
+            'research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::AwaitingReview, 'result' => 'done!', 'outputs' => ['ui/index.html'],
+        ]);
+
+        $res = app(ToolRegistry::class)->get('review_task')
+            ->execute(new ToolArguments(['task' => 1, 'verdict' => 'accept']), $this->ctx($job));
+
+        $this->assertFalse($res->success);
+        $this->assertStringContainsString('not really there', $res->observation);
+        $this->assertSame(TaskStatus::AwaitingReview, $task->refresh()->status); // NOT accepted
+    }
+
+    public function test_accept_succeeds_when_the_declared_output_really_exists(): void
+    {
+        Http::fake(['*/read*' => Http::response([
+            'path' => 'ui/index.html',
+            'content' => str_repeat('<div>real rendered content</div>', 5),
+        ])]);
+
+        $job = $this->supervisor();
+        $task = ResearchTask::create([
+            'research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::AwaitingReview, 'result' => 'done!', 'outputs' => ['ui/index.html'],
+        ]);
+
+        $res = app(ToolRegistry::class)->get('review_task')
+            ->execute(new ToolArguments(['task' => 1, 'verdict' => 'accept']), $this->ctx($job));
+
+        $this->assertTrue($res->success);
+        $this->assertSame(TaskStatus::Done, $task->refresh()->status);
+    }
+
+    public function test_accept_fails_open_when_sandbox_is_unreachable(): void
+    {
+        // Transport failure (not a 404) must NOT wedge review — we can't verify, so allow it.
+        // A ConnectionException surfaces as a non-SandboxException \Throwable from read().
+        $sandbox = new class extends SandboxClient
+        {
+            public function __construct() {}
+
+            public function read(string $job, string $path): array
+            {
+                throw new \RuntimeException('connection refused');
+            }
+        };
+        $tool = new ReviewTaskTool($sandbox);
+
+        $job = $this->supervisor();
+        $task = ResearchTask::create([
+            'research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::AwaitingReview, 'result' => 'done!', 'outputs' => ['ui/index.html'],
+        ]);
+
+        $res = $tool->execute(new ToolArguments(['task' => 1, 'verdict' => 'accept']), $this->ctx($job));
+
+        $this->assertTrue($res->success);
+        $this->assertSame(TaskStatus::Done, $task->refresh()->status);
     }
 
     public function test_supervisor_advance_plans_then_delegates_without_rescheduling_itself(): void

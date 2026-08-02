@@ -6,11 +6,20 @@ use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Settings\SettingsService;
 use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class SettingsTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Don't hit a real gateway during rendering tests.
+        Http::preventStrayRequests();
+        Http::fake(['*' => Http::response([], 500)]);
+    }
 
     public function test_settings_page_renders(): void
     {
@@ -18,6 +27,32 @@ class SettingsTest extends TestCase
             ->assertSee('Settings')
             ->assertSee('Anthropic API key')
             ->assertSee('Tavily API key');
+    }
+
+    public function test_model_fields_become_a_dropdown_of_the_gateways_live_models(): void
+    {
+        // Gateway reachable and serving a model catalogue.
+        Http::fake(['*/models' => Http::response(['data' => [
+            ['id' => 'local-standard'], ['id' => 'gpt-4o'], ['id' => 'claude'],
+        ]])]);
+
+        $html = $this->get('/settings')->assertOk()->getContent();
+
+        // The tier/default model fields are rendered as a <select> whose options
+        // come from the gateway — not a free-text box.
+        $this->assertStringContainsString('"options":["', $html);
+        $this->assertStringContainsString('gpt-4o', $html);
+        $this->assertStringContainsString('claude', $html);
+    }
+
+    public function test_model_fields_fall_back_to_text_when_the_gateway_is_down(): void
+    {
+        // Gateway unreachable → no options → fields stay as string inputs (type not 'select').
+        Http::fake(['*/models' => Http::response('down', 500)]);
+
+        $html = $this->get('/settings')->assertOk()->getContent();
+        // The default-model field is present but was NOT upgraded to a select.
+        $this->assertStringContainsString('research.llm.model', $html);
     }
 
     public function test_saving_a_plain_setting_applies_to_config(): void

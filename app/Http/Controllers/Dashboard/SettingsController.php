@@ -25,10 +25,13 @@ class SettingsController extends Controller
 
     public function index()
     {
+        $gateway = $this->gateway->status();
+        $values = $this->settings->currentValues();
+
         return view('dashboard.settings', [
-            // Configuration tab.
-            'schema' => $this->settings->schema(),
-            'values' => $this->settings->currentValues(),
+            // Configuration tab. Model fields become live dropdowns off the gateway.
+            'schema' => $this->withModelDropdowns($this->settings->schema(), $gateway['models'] ?? [], $values),
+            'values' => $values,
             'overridden' => $this->settings->overriddenKeys(),
 
             // Ollama & Tools sections (folded in from the former /tools page).
@@ -37,7 +40,7 @@ class SettingsController extends Controller
             'running' => $this->ollama->running(),
             'browser' => $this->browser->status(),
             'sandbox' => $this->sandbox->status(),
-            'gateway' => $this->gateway->status(),
+            'gateway' => $gateway,
             'tools' => $this->registry->definitions(),
             'skills' => CustomTool::latest()->get(),
             'llmDriver' => config('research.llm.driver'),
@@ -45,6 +48,43 @@ class SettingsController extends Controller
                 || filled(config('services.brave.key'))
                 || filled(config('services.serpapi.key')),
         ]);
+    }
+
+    /**
+     * Turn model fields (flagged `dynamic => gateway_models`) into dropdowns
+     * populated from the gateway's LIVE `/v1/models` list. Falls back to leaving
+     * them as text inputs when the gateway is unreachable (empty list), so nothing
+     * breaks offline. The currently-saved value is always kept selectable even if
+     * it's no longer in the live list.
+     *
+     * @param  list<string>  $models  gateway model names
+     * @param  array<string,mixed>  $values  current setting values keyed by config path
+     */
+    private function withModelDropdowns(array $schema, array $models, array $values): array
+    {
+        if (empty($models)) {
+            return $schema;
+        }
+
+        foreach ($schema as &$fields) {
+            foreach ($fields as &$f) {
+                if (($f['dynamic'] ?? null) !== 'gateway_models') {
+                    continue;
+                }
+                $options = ! empty($f['allow_blank']) ? [''] : [];
+                $options = array_merge($options, $models);
+
+                $current = (string) ($values[$f['key']] ?? '');
+                if ($current !== '' && ! in_array($current, $options, true)) {
+                    $options[] = $current;   // keep a stale/custom value selectable
+                }
+
+                $f['type'] = 'select';
+                $f['options'] = array_values(array_unique($options));
+            }
+        }
+
+        return $schema;
     }
 
     public function update(Request $request)

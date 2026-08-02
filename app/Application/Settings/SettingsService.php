@@ -28,7 +28,7 @@ class SettingsService
         return [
             'LLM' => [
                 ['key' => 'research.llm.driver', 'label' => 'Driver', 'type' => 'select', 'options' => ['ollama', 'anthropic', 'openai_compatible'], 'help' => 'ollama = local/offline direct · anthropic = cloud direct · openai_compatible = a gateway (LiteLLM) that routes to local + cloud'],
-                ['key' => 'research.llm.model', 'label' => 'Default model', 'type' => 'string', 'help' => 'Used when no tier overrides it. e.g. qwen3:8b (ollama), claude-opus-4-8 (anthropic), or a gateway model name like local-standard / gpt-4o (openai_compatible)'],
+                ['key' => 'research.llm.model', 'label' => 'Default model', 'type' => 'string', 'dynamic' => 'gateway_models', 'help' => 'Used when no tier overrides it. e.g. qwen3:8b (ollama), claude-opus-4-8 (anthropic), or a gateway model name like local-standard / gpt-4o (openai_compatible)'],
                 ['key' => 'research.llm.temperature', 'label' => 'Temperature', 'type' => 'float'],
                 ['key' => 'research.llm.max_tokens', 'label' => 'Max tokens', 'type' => 'int'],
                 ['key' => 'research.llm.transcript_window', 'label' => 'Transcript window', 'type' => 'int', 'help' => 'Messages kept verbatim before summarizing'],
@@ -93,6 +93,8 @@ class SettingsService
                 'key' => "research.llm.tiers.$name.model",
                 'label' => ucfirst($name).' tier model',
                 'type' => 'string',
+                'dynamic' => 'gateway_models',   // controller turns this into a live dropdown
+                'allow_blank' => true,           // blank = fall back to the default model
                 'help' => trim((string) ($meta['hint'] ?? '')).' — blank = default model; gateway names e.g. local-fast, local-hard, gpt-4o, claude',
             ];
         }

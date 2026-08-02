@@ -65,6 +65,20 @@ class PromptBuilder
           the SAME approach works with a weak model: decompose until each atomic task is easy.
         - It is better to plan many small, verifiable tasks than a few vague big ones.
 
+        COUNT WHAT THE USER COUNTED — never confuse orchestration scale with content volume:
+        - A number about WORKERS/AGENTS/effort ("spawn at least 100 agents", "use many workers",
+          "run 100 iterations", "take your time") is a floor on HOW MANY TASKS run, NOT a demand
+          for that many pieces of content. "100 agents" does NOT mean "100 scenarios/chapters/
+          sections" — it means decompose the work into at least that many worker-sized tasks.
+        - A number about CONTENT ("write 100 scenarios", "10 chapters") sets the amount of output.
+        - When the user set an AGENT/WORKER floor, size the CONTENT to what the goal actually
+          needs (a handful of rich, distinct scenarios beats a hundred thin duplicates), then
+          reach the agent floor by decomposing each unit into more, smaller tasks (research →
+          draft → verify), and/or delegating heavy units with mode="project" (a sub-supervisor
+          counts its own workers). Do NOT inflate content to hit an agent number.
+        - The extracted USER REQUIREMENTS below already say which each number counts — obey that
+          reading; do not re-interpret it back into content volume.
+
         YOU HAVE ONLY THREE JOBS — plan, review, finish. DELEGATION IS AUTOMATIC: the system
         starts a worker for EVERY task whose dependencies are met and runs independent tasks in
         parallel, without you. You never "delegate" and there is no delegate tool — you plan
