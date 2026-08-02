@@ -24,20 +24,28 @@ model_list:
   # thinking ON for standard (the default / supervisor / most work) and hard, and
   # OFF only for `light` — genuinely trivial, mechanical tasks. qwen3 puts thinking
   # on a separate channel, so the JSON answer stays clean either way.
+  # num_ctx is CRITICAL: Ollama defaults to ~4k context, which TRUNCATES the long
+  # worker/supervisor prompts (system prompt + tools + transcript easily exceed
+  # that) — the model then never sees the real task and botches tool calls. The
+  # direct Ollama driver set num_ctx=16384; the gateway path must set it too or
+  # every non-trivial task silently fails. (Bigger num_ctx = more RAM for KV cache.)
   - model_name: local-fast
     litellm_params:
-      model: ollama_chat/qwen3:1.7b
+      model: ollama_chat/qwen3:8b        # qwen3:1.7b not pulled — use an installed tag
       api_base: os.environ/OLLAMA_BASE_URL
+      num_ctx: 16384
       think: false
   - model_name: local-standard
     litellm_params:
-      model: ollama_chat/qwen3:8b
+      model: ollama_chat/qwen3.5:latest  # the model that was WORKING before the router change
       api_base: os.environ/OLLAMA_BASE_URL
+      num_ctx: 16384
       think: true
   - model_name: local-hard
     litellm_params:
-      model: ollama_chat/qwen3:32b
+      model: ollama_chat/qwen3.5:latest  # qwen3:32b not pulled — use the other installed model
       api_base: os.environ/OLLAMA_BASE_URL
+      num_ctx: 16384
       think: true
 
   # ── Cloud (used only when online + the provider key is set) ─────────────────

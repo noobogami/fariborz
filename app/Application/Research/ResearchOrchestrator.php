@@ -199,6 +199,20 @@ class ResearchOrchestrator
             return;
         }
 
+        // 5a-bis. ANTI-LIVELOCK: a weak supervisor can keep calling review_task on a
+        //     not-ready task (wrong target) while workers run — spinning with no
+        //     progress. If a review just FAILED and workers are still in flight,
+        //     PARK; a finishing worker re-wakes us (ResumeSupervisorOnChildDone),
+        //     by which point the review target is unambiguous. Bounded: once the
+        //     last worker finishes there are no in-flight tasks, so it can't park
+        //     forever — it must then review the (now clearly awaiting) tasks.
+        if ($job->isSupervisor() && ! $result->success && $decision->tool === 'review_task'
+            && $job->tasks()->where('status', TaskStatus::InProgress)->exists()) {
+            $this->jobs->setActivity($job, 'awaiting_worker');
+
+            return;
+        }
+
         if ($result->pauseLoop) {
             $this->jobs->setActivity($job, 'awaiting_worker');
 
@@ -262,10 +276,27 @@ class ResearchOrchestrator
     {
         $tasks = $job->tasks()->get();
         $done = $tasks->where('status', TaskStatus::Done)->pluck('seq')->map(fn ($s) => (int) $s)->all();
+        $cap = (int) config('research.supervisor.max_task_attempts', 3);
         $spawned = 0;
 
         foreach ($tasks as $task) {
             if ($task->status !== TaskStatus::Pending || ! $task->isReady($done)) {
+                continue;
+            }
+
+            // DETERMINISTIC LOOP-BREAK: a weak worker can produce output the
+            // supervisor keeps rejecting (revise → redo → revise …) indefinitely.
+            // Once a task has been delegated `cap` times, stop re-doing it and
+            // FORCE-ACCEPT the best-effort output (its files already exist in the
+            // shared workspace) so the project can finish. The trace records it so
+            // the final confidence/report can reflect that it wasn't fully verified.
+            if ($task->attempts >= $cap) {
+                $task->update(['status' => TaskStatus::Done]);
+                $this->trace->record($job, EventType::GuardrailTriggered,
+                    "Task #{$task->seq} \"{$task->title}\" force-accepted after {$task->attempts} attempts — "
+                    .'revision limit reached; kept best-effort output to break an endless revise loop.',
+                    ['task' => $task->seq, 'attempts' => $task->attempts, 'forced' => true]);
+
                 continue;
             }
 

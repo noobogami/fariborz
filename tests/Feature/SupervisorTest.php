@@ -72,6 +72,25 @@ class SupervisorTest extends TestCase
         $this->assertSame(1, ResearchJob::where('parent_job_id', $job->id)->count());
     }
 
+    public function test_a_task_that_exceeds_the_attempt_cap_is_force_accepted_not_redelegated(): void
+    {
+        Queue::fake();
+        config(['research.supervisor.max_task_attempts' => 3]);
+        // Finish is available if the supervisor proceeds after the loop is broken.
+        $this->app->instance(LlmClient::class, new FakeLlmClient([['action' => 'finish', 'report' => 'x', 'confidence' => 0.4]]));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        // A ready task already delegated `cap` times — the endless revise loop.
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Loopy', 'brief' => 'b',
+            'status' => TaskStatus::Pending, 'depends_on' => [], 'attempts' => 3]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        // Force-accepted as best-effort (Done) rather than re-delegated — no new worker.
+        $this->assertSame(TaskStatus::Done, ResearchTask::where('research_job_id', $job->id)->where('seq', 1)->first()->status);
+        $this->assertSame(0, ResearchJob::where('parent_job_id', $job->id)->count());
+    }
+
     public function test_stall_breaker_stops_a_blocked_loop(): void
     {
         config()->set('research.limits.max_stalls', 3);

@@ -46,6 +46,12 @@ return [
         // How deep sub-projects may nest (supervisor → sub-supervisor → …). Past
         // this, a "project" delegation is downgraded to a plain worker.
         'max_depth' => env('RESEARCH_SUPERVISOR_MAX_DEPTH', 3),
+        // How many times ONE task may be delegated before the orchestrator stops
+        // re-doing it. A weak worker can produce output the supervisor keeps
+        // rejecting (revise → redo → revise …) forever; past this cap the task is
+        // force-accepted as best-effort so the project can finish. Deterministic —
+        // the escape does not depend on the weak model noticing it's stuck.
+        'max_task_attempts' => env('RESEARCH_SUPERVISOR_MAX_TASK_ATTEMPTS', 3),
     ],
 
     /*

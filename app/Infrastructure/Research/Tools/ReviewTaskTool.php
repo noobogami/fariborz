@@ -51,7 +51,17 @@ class ReviewTaskTool implements ControlTool
             return ToolResult::fail("There is no task #{$seq} in the plan.");
         }
         if ($task->status !== TaskStatus::AwaitingReview) {
-            return ToolResult::fail("Task #{$seq} is {$task->status->value}, not awaiting review. Delegate or wait for it first.");
+            // Point the model at the RIGHT target instead of a bare rejection — a
+            // weak supervisor otherwise re-tries the same wrong task (e.g. one
+            // already Done) every turn and livelocks while workers run.
+            $awaiting = ResearchTask::where('research_job_id', $ctx->jobId())
+                ->where('status', TaskStatus::AwaitingReview)->orderBy('seq')->pluck('seq')->all();
+            $guide = $awaiting
+                ? 'Review '.(count($awaiting) === 1 ? "task #{$awaiting[0]}" : 'tasks '.implode(', ', array_map(fn ($s) => "#$s", $awaiting)))
+                    .' instead — only ★ REVIEW tasks can be reviewed.'
+                : 'No task is awaiting review right now; wait for the running workers to finish.';
+
+            return ToolResult::fail("Task #{$seq} is {$task->status->value}, not awaiting review. {$guide}");
         }
 
         if ($args->string('verdict') === 'accept') {

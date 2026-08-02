@@ -355,6 +355,16 @@ class PromptBuilder
 
         $readyNote = empty($ready) ? 'none right now' : implode(', ', array_map(fn ($s) => "#$s", $ready));
 
+        // Pin the EXACT task(s) to review this turn. A weak model otherwise keeps
+        // calling review_task on the wrong number (e.g. one already Done) and
+        // livelocks. Naming the target removes that choice.
+        $reviewSeqs = collect($ctx->tasks)->where('status', 'awaiting_review')->pluck('seq')->all();
+        $reviewLine = empty($reviewSeqs)
+            ? ''
+            : "\n► REVIEW NOW: ".implode(', ', array_map(fn ($s) => "task #$s", $reviewSeqs))
+                .' — read its output (list_files / read_file) then call review_task with THAT exact task number. '
+                ."Do NOT review any task that is not in this list.\n";
+
         $requirements = $this->requirementsBlock($ctx);
 
         return <<<PROMPT
@@ -365,7 +375,7 @@ class PromptBuilder
         {$plan}
 
         Delegation is automatic — ready tasks are already being run by workers for you.
-
+        {$reviewLine}
         Decide the single next action (in this priority):
         - If a task is ★ REVIEW: read_file / list_files its output to VERIFY it, then review_task
           (accept only if the file is genuinely correct; else revise with specific notes).
