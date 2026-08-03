@@ -80,9 +80,23 @@ class OpenAiCompatibleClientTest extends TestCase
         Http::assertSent(fn ($request) => ! $request->hasHeader('Authorization'));
     }
 
-    public function test_it_throws_on_an_empty_completion(): void
+    public function test_an_empty_completion_returns_empty_string_not_a_crash(): void
     {
+        // A reasoning model that spends its whole output budget on hidden thinking
+        // returns content="" (finish_reason=length). This must NOT throw — it flows
+        // to the parser → the bounded invalid-decision guardrail — so a full context
+        // window degrades gracefully instead of crashing the entire job.
         Http::fake(['litellm:4000/*' => Http::response(['choices' => [['message' => ['content' => '']]]])]);
+
+        $result = app(OpenAiCompatibleClient::class)->complete('SYS', [['role' => 'user', 'content' => 'hi']]);
+
+        $this->assertSame('', $result);
+    }
+
+    public function test_it_throws_on_a_gateway_http_error(): void
+    {
+        // A genuine gateway/HTTP failure is still fatal to the iteration.
+        Http::fake(['litellm:4000/*' => Http::response('upstream down', 502)]);
 
         $this->expectException(\RuntimeException::class);
 

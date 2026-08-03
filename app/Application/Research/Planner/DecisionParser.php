@@ -18,6 +18,15 @@ class DecisionParser
 {
     public function parse(string $raw, ToolRegistry $registry): Decision
     {
+        if (trim($raw) === '') {
+            throw new InvalidDecisionException(
+                'The model returned an empty response — it likely ran out of output space '
+                .'or exceeded its context window (a reasoning model can spend the whole '
+                .'remaining budget on hidden thinking and emit no answer). Reduce the prompt/'
+                .'transcript size, raise num_ctx, or lower the task scope.'
+            );
+        }
+
         $json = $this->extractJson($raw);
 
         if ($json === null || ! isset($json['action'])) {

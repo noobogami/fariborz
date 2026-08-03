@@ -64,11 +64,14 @@ class OpenAiCompatibleClient implements LlmClient
 
         $content = $response->json('choices.0.message.content');
 
-        if (! is_string($content) || $content === '') {
-            throw new RuntimeException('LLM gateway returned an empty completion: '.$response->body());
-        }
-
-        return $content;
+        // An empty completion is NOT fatal. It happens when the model runs out of
+        // output space — classically when a reasoning ("think") model burns the
+        // whole remaining context window on `reasoning_content` and emits no answer
+        // (finish_reason=length, content=""). Returning '' routes it through the
+        // parser → the bounded invalid-decision guardrail, so the loop fails
+        // gracefully (or retries) instead of crashing the entire job with an
+        // uncaught RuntimeException. The HTTP-level failure above still throws.
+        return is_string($content) ? $content : '';
     }
 
     /**

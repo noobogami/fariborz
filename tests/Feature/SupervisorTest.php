@@ -13,6 +13,7 @@ use App\Domain\Research\Enums\TaskStatus;
 use App\Domain\Research\ValueObjects\ResearchContext;
 use App\Domain\Research\ValueObjects\ToolArguments;
 use App\Events\ResearchCompleted;
+use App\Events\ResearchFailed;
 use App\Infrastructure\Research\Tools\ReviewTaskTool;
 use App\Jobs\AdvanceResearchJob;
 use App\Listeners\ResumeSupervisorOnChildDone;
@@ -210,6 +211,47 @@ class SupervisorTest extends TestCase
         $this->assertSame(TaskStatus::AwaitingReview, $task->status);
         $this->assertStringContainsString('THE ACTUAL CHAPTER TEXT', $task->result);
         Queue::assertPushed(AdvanceResearchJob::class, fn ($j) => $j->jobId === $job->id);  // supervisor woken
+    }
+
+    public function test_failed_worker_is_requeued_deterministically_not_sent_to_review(): void
+    {
+        // A worker crash / rate-limit is NOT a review case. It must go straight back
+        // to Pending (so the orchestrator re-delegates it and the supervisor parks
+        // with no LLM turn) — never to AwaitingReview, which would burn a review turn
+        // and grow the transcript toward the context-window crash.
+        Queue::fake();
+        $job = $this->supervisor();
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Assemble', 'brief' => 'do it', 'status' => TaskStatus::InProgress]);
+        $worker = ResearchJob::create(['goal' => 'task', 'role' => JobRole::Worker, 'parent_job_id' => $job->id, 'status' => JobStatus::Failed, 'config' => []]);
+        $task->update(['child_job_id' => $worker->id]);
+
+        app(ResumeSupervisorOnChildDone::class)->handleFailed(new ResearchFailed($worker->id, 'LLM gateway request failed: 429 rate limit'));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Pending, $task->status, 'a failed worker requeues the task, it is not reviewed');
+        $this->assertStringStartsWith(ResearchTask::WORKER_ERROR_PREFIX, $task->result);
+        Queue::assertPushed(AdvanceResearchJob::class, fn ($j) => $j->jobId === $job->id);  // supervisor woken to re-delegate
+    }
+
+    public function test_a_task_that_only_ever_failed_is_marked_failed_not_force_accepted(): void
+    {
+        // Attempt cap reached AND the last outcome was a worker error → the task has
+        // no artifact worth keeping, so it must be marked Failed (honest) rather than
+        // paraded as Done. Contrast test_a_task_that_exceeds_the_attempt_cap... which
+        // force-accepts a task that DID produce output but kept getting revised.
+        Queue::fake();
+        config(['research.supervisor.max_task_attempts' => 3]);
+        $this->app->instance(LlmClient::class, new FakeLlmClient([['action' => 'finish', 'report' => 'x', 'confidence' => 0.3]]));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Rate-limited', 'brief' => 'b',
+            'status' => TaskStatus::Pending, 'depends_on' => [], 'attempts' => 3,
+            'result' => ResearchTask::WORKER_ERROR_PREFIX.'429 rate limit']);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $this->assertSame(TaskStatus::Failed, ResearchTask::where('research_job_id', $job->id)->where('seq', 1)->first()->status);
+        $this->assertSame(0, ResearchJob::where('parent_job_id', $job->id)->count(), 'no new worker spawned');
     }
 
     public function test_review_accept_and_revise(): void

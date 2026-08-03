@@ -291,6 +291,23 @@ class ResearchOrchestrator
             // shared workspace) so the project can finish. The trace records it so
             // the final confidence/report can reflect that it wasn't fully verified.
             if ($task->attempts >= $cap) {
+                // If every attempt ended in a WORKER FAILURE (crash / rate-limit /
+                // infra error) there is no artifact to keep — mark it Failed so the
+                // project finishes honestly rather than parading a broken task as
+                // Done. A task that produced output but kept getting revised is still
+                // force-accepted (best-effort) to break an endless revise loop.
+                $onlyFailed = str_starts_with((string) $task->result, ResearchTask::WORKER_ERROR_PREFIX);
+
+                if ($onlyFailed) {
+                    $task->update(['status' => TaskStatus::Failed]);
+                    $this->trace->record($job, EventType::GuardrailTriggered,
+                        "Task #{$task->seq} \"{$task->title}\" marked FAILED after {$task->attempts} attempts — "
+                        .'every worker errored (e.g. rate limit) and produced no artifact; giving up on it so the project can finish.',
+                        ['task' => $task->seq, 'attempts' => $task->attempts, 'failed' => true]);
+
+                    continue;
+                }
+
                 $task->update(['status' => TaskStatus::Done]);
                 $this->trace->record($job, EventType::GuardrailTriggered,
                     "Task #{$task->seq} \"{$task->title}\" force-accepted after {$task->attempts} attempts — "

@@ -20,6 +20,14 @@ class ResearchTask extends Model
 {
     use HasUuids;
 
+    /**
+     * Marks a task's `result` as a WORKER FAILURE (crash / rate-limit / infra error)
+     * rather than a produced artifact. The orchestrator reads this to decide whether
+     * an attempt-cap-exhausted task should be force-accepted (had output, just kept
+     * getting revised) or marked Failed (never produced anything worth keeping).
+     */
+    public const WORKER_ERROR_PREFIX = '⚠ Worker error: ';
+
     protected $guarded = [];
 
     protected $attributes = [
