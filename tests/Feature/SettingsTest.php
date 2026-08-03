@@ -25,7 +25,7 @@ class SettingsTest extends TestCase
     {
         $this->get('/settings')->assertOk()
             ->assertSee('Settings')
-            ->assertSee('Anthropic API key')
+            ->assertSee('Gateway URL')
             ->assertSee('Tavily API key');
     }
 

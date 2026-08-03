@@ -2,11 +2,6 @@
 
 return [
 
-    // The LLM provider (Anthropic Messages API).
-    'anthropic' => [
-        'key' => env('ANTHROPIC_API_KEY'),
-    ],
-
     // The OpenAI-compatible LLM gateway's OWN key (e.g. a LiteLLM master key).
     // Blank for a keyless local gateway. Provider keys (OpenAI/Gemini/DeepSeek/…)
     // live in the gateway's config, not here.

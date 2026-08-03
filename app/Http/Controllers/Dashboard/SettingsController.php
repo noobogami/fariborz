@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Dashboard;
 
 use App\Application\Research\Browser\BrowserClient;
 use App\Application\Research\Llm\GatewayManager;
-use App\Application\Research\Ollama\OllamaManager;
+use App\Application\Research\Llm\LiteLLMAdminClient;
 use App\Application\Research\Sandbox\SandboxClient;
 use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Settings\SettingsService;
@@ -16,10 +16,10 @@ class SettingsController extends Controller
 {
     public function __construct(
         private SettingsService $settings,
-        private OllamaManager $ollama,
         private BrowserClient $browser,
         private SandboxClient $sandbox,
         private GatewayManager $gateway,
+        private LiteLLMAdminClient $litellm,
         private ToolRegistry $registry,
     ) {}
 
@@ -34,13 +34,12 @@ class SettingsController extends Controller
             'values' => $values,
             'overridden' => $this->settings->overriddenKeys(),
 
-            // Ollama & Tools sections (folded in from the former /tools page).
-            'status' => $this->ollama->status(),
-            'models' => $this->ollama->models(),
-            'running' => $this->ollama->running(),
+            // Tools tab (service status + gateway model management).
             'browser' => $this->browser->status(),
             'sandbox' => $this->sandbox->status(),
             'gateway' => $gateway,
+            'gatewayModels' => $this->litellm->list(),
+            'gatewayProviders' => (array) config('litellm.providers', []),
             'tools' => $this->registry->definitions(),
             'skills' => CustomTool::latest()->get(),
             'llmDriver' => config('research.llm.driver'),

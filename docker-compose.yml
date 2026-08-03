@@ -46,16 +46,12 @@ x-app-env: &app-env
   # (mac) so the host daemon accepts connections from the container network.
   # To run Ollama IN Docker instead: `docker compose --profile ollama-docker up`
   # and change this back to http://ollama:11434.
-  RESEARCH_LLM_DRIVER: ${RESEARCH_LLM_DRIVER:-ollama}
-  RESEARCH_LLM_MODEL: ${RESEARCH_LLM_MODEL:-qwen3:30b}
-  # Hardcoded (like DB_HOST/REDIS_HOST) so .env's localhost value can't leak into
-  # the container. Change to http://ollama:11434 if you use --profile ollama-docker.
-  OLLAMA_BASE_URL: http://host.docker.internal:11434
-  OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-16384}
-  OLLAMA_THINK: ${OLLAMA_THINK:-false}
-  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-  # LiteLLM gateway (driver = openai_compatible) — routes to local Ollama AND
-  # cloud providers. In-network address; the app's own key mirrors the master key.
+  # A default GATEWAY model name (managed in Tools ▸ Gateway models).
+  RESEARCH_LLM_MODEL: ${RESEARCH_LLM_MODEL:-local-standard}
+  # NOTE: the app no longer talks to Ollama directly — Ollama's connection is the
+  # gateway's concern (OLLAMA_BASE_URL is set on the litellm service, not here).
+  # LiteLLM gateway — the ONLY path to models (local Ollama AND cloud) behind one
+  # endpoint. In-network address; the app's own key mirrors the master key.
   LLM_GATEWAY_URL: http://litellm:4000/v1
   # Must equal the gateway's LITELLM_MASTER_KEY (derived from the same var below).
   LLM_GATEWAY_KEY: ${LITELLM_MASTER_KEY:-sk-fariborz-local}

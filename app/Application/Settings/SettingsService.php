@@ -27,28 +27,15 @@ class SettingsService
     {
         return [
             'LLM' => [
-                ['key' => 'research.llm.driver', 'label' => 'Driver', 'type' => 'select', 'options' => ['ollama', 'anthropic', 'openai_compatible'], 'help' => 'ollama = local/offline direct · anthropic = cloud direct · openai_compatible = a gateway (LiteLLM) that routes to local + cloud'],
-                ['key' => 'research.llm.model', 'label' => 'Default model', 'type' => 'string', 'dynamic' => 'gateway_models', 'help' => 'Used when no tier overrides it. e.g. qwen3:8b (ollama), claude-opus-4-8 (anthropic), or a gateway model name like local-standard / gpt-4o (openai_compatible)'],
+                ['key' => 'research.llm.model', 'label' => 'Default model', 'type' => 'string', 'dynamic' => 'gateway_models', 'help' => 'Used when no tier overrides it. A gateway model name — pick from the dropdown (managed in Tools ▸ Gateway models).'],
                 ['key' => 'research.llm.temperature', 'label' => 'Temperature', 'type' => 'float'],
                 ['key' => 'research.llm.max_tokens', 'label' => 'Max tokens', 'type' => 'int'],
                 ['key' => 'research.llm.transcript_window', 'label' => 'Transcript window', 'type' => 'int', 'help' => 'Messages kept verbatim before summarizing'],
             ],
             'Model tiers — per-task routing (leave blank to use the default model)' => $this->tierFields(),
-            'Cloud LLM — Anthropic' => [
-                ['key' => 'services.anthropic.key', 'label' => 'Anthropic API key', 'type' => 'string', 'secret' => true],
-            ],
-            'Gateway — LiteLLM / OpenAI-compatible (routes to local + cloud)' => [
-                ['key' => 'research.llm.openai_compatible.base_url', 'label' => 'Gateway URL', 'type' => 'string', 'help' => 'Self-hosted LiteLLM (routes to Ollama + cloud), LocalAI, vLLM, or OpenRouter. e.g. http://localhost:4000/v1'],
-                ['key' => 'services.openai_compatible.key', 'label' => 'Gateway key', 'type' => 'string', 'secret' => true, 'help' => 'The gateway\'s own key (e.g. LiteLLM master key). Blank for a keyless local gateway. Provider keys live in the gateway, not here.'],
-                ['key' => 'research.llm.openai_compatible.referer', 'label' => 'Attribution URL (OpenRouter only)', 'type' => 'string', 'help' => 'Ignored by LiteLLM/LocalAI; may be blank'],
-                ['key' => 'research.llm.openai_compatible.title', 'label' => 'Attribution title (OpenRouter only)', 'type' => 'string'],
-            ],
-            'Local LLM — Ollama' => [
-                ['key' => 'research.llm.ollama.base_url', 'label' => 'Ollama URL', 'type' => 'string', 'help' => 'e.g. http://localhost:11434'],
-                ['key' => 'research.llm.ollama.num_ctx', 'label' => 'Context tokens', 'type' => 'int'],
-                ['key' => 'research.llm.ollama.keep_alive', 'label' => 'Keep-alive', 'type' => 'string', 'help' => 'How long Ollama keeps the model loaded between turns, e.g. 30m, 1h, or -1 to keep it resident'],
-                ['key' => 'research.llm.ollama.think', 'label' => 'Thinking (reasoning models)', 'type' => 'bool', 'help' => 'Off = return JSON only (recommended)'],
-                ['key' => 'research.llm.ollama.force_json', 'label' => 'Force JSON output', 'type' => 'bool'],
+            'Gateway — LiteLLM (every model call routes through here)' => [
+                ['key' => 'research.llm.openai_compatible.base_url', 'label' => 'Gateway URL', 'type' => 'string', 'help' => 'Self-hosted LiteLLM (routes to Ollama + cloud). e.g. http://localhost:4000/v1'],
+                ['key' => 'services.openai_compatible.key', 'label' => 'Gateway key', 'type' => 'string', 'secret' => true, 'help' => 'The gateway\'s own key (LiteLLM master key). Provider keys live in the gateway, not here — add cloud models with their keys in Tools ▸ Gateway models.'],
             ],
             'Search APIs (optional — enable a tool by adding its key)' => [
                 ['key' => 'services.tavily.key', 'label' => 'Tavily API key', 'type' => 'string', 'secret' => true, 'help' => 'Enables tavily_search (~1000/mo free)'],

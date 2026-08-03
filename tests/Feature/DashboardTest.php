@@ -67,15 +67,16 @@ class DashboardTest extends TestCase
             ->assertDontSee('DONE question here');
     }
 
-    public function test_tools_and_ollama_render_under_settings(): void
+    public function test_tools_and_gateway_render_under_settings(): void
     {
-        // Tools & Ollama is now a tab inside Settings; its markup renders on the page.
+        // The Tools tab (inside Settings) renders the gateway model management +
+        // the tool inventory. There is no Ollama card anymore — the gateway owns
+        // the model connections.
         $this->get('/settings')->assertOk()
-            ->assertSee('Ollama')
-            ->assertSee('Browser')          // Playwright service card
+            ->assertSee('GATEWAY MODELS')   // gateway model management panel
+            ->assertSee('ADD MODEL')        // the add-model form
             ->assertSee('browser_search')   // keyless search tool
-            ->assertSee('wikipedia')        // a registered keyless tool
-            ->assertSee('qwen3:30b');       // faked installed model
+            ->assertSee('wikipedia');       // a registered keyless tool
     }
 
     public function test_old_tools_url_redirects_to_settings(): void

@@ -1,4 +1,4 @@
-{{-- Tools & Ollama — a single operational section rendered inline under Settings,
+{{-- Tools & Gateway — a single operational section rendered inline under Settings,
      after the editable config groups. `display:contents` lets the <section> sit as a
      direct flex child of .set-main so it aligns with the config cards. --}}
 <style>
@@ -10,13 +10,13 @@
     .to-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:11px}
 </style>
 
-<div x-data="ollama()" x-init="start()" style="display:contents">
+<div x-data="toolsPanel()" x-init="start()" style="display:contents">
     <section id="tools" style="border-radius:14px;background:#1a1f21;border:1px solid rgba(255,255,255,.07);overflow:hidden;scroll-margin-top:16px">
 
         {{-- section header --}}
         <div class="flex flex-wrap items-center" style="gap:11px;padding:13px 16px;border-bottom:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02)">
-            <span class="fz-mono" style="font-size:10.5px;letter-spacing:.14em;color:#c8d0d3">TOOLS &amp; OLLAMA</span>
-            <span class="fz-mono" style="font-size:10px;color:#8a9499"><span x-text="tools.length"></span> tools · {{ count($skills) }} agent-built · <span x-text="status.reachable ? 'ollama up' : 'ollama down'" :style="{ color: status.reachable ? '#5fdda5' : '#ff9b9b' }"></span></span>
+            <span class="fz-mono" style="font-size:10.5px;letter-spacing:.14em;color:#c8d0d3">TOOLS</span>
+            <span class="fz-mono" style="font-size:10px;color:#8a9499"><span x-text="tools.length"></span> tools · {{ count($skills) }} agent-built · <span x-text="gateway.reachable ? 'gateway up' : 'gateway down'" :style="{ color: gateway.reachable ? '#5fdda5' : '#ff9b9b' }"></span></span>
             <div class="flex items-center" style="margin-left:auto;gap:6px;flex-wrap:wrap">
                 <template x-for="f in ['ALL','ACTIVE','ATTENTION']" :key="f">
                     <button @click="filter = f" class="fz-mono"
@@ -68,41 +68,8 @@
                     </div>
                 </section>
 
-                {{-- Ollama + runtime aside (vertical stack) --}}
+                {{-- Gateway + runtime aside (vertical stack) --}}
                 <aside class="to-side">
-
-                    {{-- Ollama --}}
-                    <div style="border-radius:14px;border:1px solid rgba(234,99,140,.24);background:radial-gradient(600px 200px at 20% -60%,rgba(234,99,140,.16),transparent 60%),linear-gradient(180deg,#23282c,#1b2021);padding:16px">
-                        <div class="flex items-center" style="gap:9px;margin-bottom:13px">
-                            <div style="width:7px;height:7px;border-radius:50%;background:#ea638c;animation:breathe 2s ease-in-out infinite"></div>
-                            <span class="fz-mono" style="font-size:10px;letter-spacing:.13em;color:#ea638c;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="'OLLAMA · ' + (status.base_url || 'localhost:11434')"></span>
-                            <span class="fz-mono" style="margin-left:auto;flex:0 0 auto;font-size:9.5px" :style="{ color: status.reachable ? '#5fdda5' : '#ff9b9b' }" x-text="status.reachable ? 'up' : 'down'"></span>
-                        </div>
-
-                        <form method="POST" action="{{ route('ollama.pull') }}" class="flex" style="gap:7px">
-                            @csrf
-                            <input name="model" required placeholder="model:tag" class="fz-mono"
-                                   style="flex:1;min-width:0;padding:9px 12px;border-radius:9px;background:rgba(0,0,0,.36);border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:12px">
-                            <button type="submit" style="font-size:12px;font-weight:600;padding:9px 15px;border-radius:9px;border:1px solid rgba(255,217,218,.35);background:linear-gradient(145deg,#ea638c,#89023e);color:#fff;cursor:pointer"
-                                    onmouseover="this.style.filter='brightness(1.1)'" onmouseout="this.style.filter='none'">Pull</button>
-                        </form>
-                        <div class="fz-mono" style="font-size:9.5px;color:#8a9499;margin-top:7px">Large models take a few minutes; the list below refreshes as it lands.</div>
-
-                        <div style="margin-top:15px;padding-top:13px;border-top:1px solid rgba(255,255,255,.07)">
-                            <div class="fz-mono" style="font-size:9.5px;letter-spacing:.13em;color:#8a9499;margin-bottom:10px">RESIDENT MODELS</div>
-                            <div class="flex flex-col" style="gap:7px">
-                                <template x-for="m in residentModels" :key="m.name">
-                                    <div class="flex items-center" style="gap:9px;padding:8px 10px;border-radius:9px" :style="{ background: m.bg, border: '1px solid '+m.bd }">
-                                        <span style="width:6px;height:6px;flex:0 0 6px;border-radius:50%" :style="{ background: m.dot }"></span>
-                                        <span class="fz-mono" style="font-size:11.5px;min-width:0;overflow:hidden;text-overflow:ellipsis" :style="{ color: m.fg }" x-text="m.name"></span>
-                                        <span class="fz-mono" style="margin-left:auto;font-size:9.5px;color:#96a0a5" x-text="m.size"></span>
-                                        <span class="fz-mono" style="font-size:9px;padding:2px 6px;border-radius:5px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#a3adb1" x-text="m.tag"></span>
-                                    </div>
-                                </template>
-                                <div x-show="!residentModels.length" class="fz-mono" style="font-size:11px;color:#8a9499">No models installed.</div>
-                            </div>
-                        </div>
-                    </div>
 
                     {{-- LLM gateway (LiteLLM / OpenAI-compatible router) — shown when it's the
                          active driver or reachable. Lists the models it serves = the names a
@@ -133,12 +100,100 @@
                         <div x-show="!gateway.reachable" class="fz-mono" style="font-size:11px;color:#ff9b9b">Unreachable — is the <span style="color:#c8d0d3">litellm</span> service up?</div>
                     </div>
 
+                    {{-- Gateway models — add/remove models on the LiteLLM gateway (DB-backed) --}}
+                    <div x-show="gateway.is_active_driver || gateway.reachable"
+                         style="border-radius:13px;border:1px solid rgba(255,255,255,.07);background:#151a1c;padding:15px;margin-bottom:14px">
+                        <div class="flex items-center" style="gap:9px;margin-bottom:11px">
+                            <span class="fz-mono" style="font-size:9.5px;letter-spacing:.13em;color:#8a9499">GATEWAY MODELS</span>
+                            <button type="button" @click="checkHealth()" :disabled="checkingHealth" title="LiteLLM /health — makes a real call to every model" class="fz-mono"
+                                    style="margin-left:auto;font-size:9px;color:#c8d0d3;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:3px 8px;cursor:pointer"
+                                    x-text="checkingHealth ? 'checking…' : 'check health'"></button>
+                            <a :href="(gateway.base_url||'').replace(/\/v1\/?$/,'') + '/ui'" target="_blank" class="fz-mono" style="font-size:9px;color:#8e9a9f;text-decoration:none">LiteLLM UI ↗</a>
+                        </div>
+
+                        {{-- current models — ALSO the live health indicator. Dot: grey =
+                             unknown, slow-blinking = checking, green = up, red = down
+                             (hover a red chip for the error). Driven by "check health". --}}
+                        <div class="flex flex-wrap items-center" style="gap:6px;margin-bottom:13px">
+                            <template x-for="m in gatewayModels" :key="m.name">
+                                <span class="fz-mono flex items-center" :title="modelHealthError[m.name] || ''"
+                                      style="gap:6px;font-size:10px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#dbe2e4">
+                                    <span style="width:7px;height:7px;border-radius:50%;flex:0 0 7px"
+                                          :style="{ background: dotColor(m.name), animation: checkingHealth ? 'breathe 1.1s ease-in-out infinite' : 'none' }"></span>
+                                    <span x-text="m.name"></span>
+                                    <button type="button" @click="removeModel(m.name)" title="remove" style="background:none;border:none;color:#8a9499;cursor:pointer;font-size:10px;padding:0;line-height:1">✕</button>
+                                </span>
+                            </template>
+                            <span x-show="!gatewayModels.length" class="fz-mono" style="font-size:10px;color:#8a9499">No models yet — add one below.</span>
+                            <span x-show="healthMsg" class="fz-mono" style="font-size:9px;color:#8a9499;margin-left:2px" x-text="healthMsg"></span>
+                        </div>
+
+                        {{-- add-model form --}}
+                        <div style="border-top:1px solid rgba(255,255,255,.07);padding-top:12px;display:flex;flex-direction:column;gap:9px">
+                            <div class="fz-mono" style="font-size:9px;letter-spacing:.12em;color:#8a9499">ADD MODEL</div>
+
+                            <label class="fz-mono" style="font-size:9.5px;color:#8a9499;display:block">Provider
+                                <div style="position:relative;margin-top:4px">
+                                    <select x-model="mform.provider" class="fz-mono" style="width:100%;padding:7px 28px 7px 10px;border-radius:7px;background:#101416;border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px;appearance:none;-webkit-appearance:none;cursor:pointer">
+                                        <template x-for="(p,key) in gatewayProviders" :key="key"><option :value="key" x-text="p.label" style="background:#101416;color:#e4e9ea"></option></template>
+                                    </select>
+                                    <span class="fz-mono" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);pointer-events:none;font-size:9px;color:#8a9499">▾</span>
+                                </div>
+                            </label>
+
+                            <label class="fz-mono" style="font-size:9.5px;color:#8a9499;display:block">Model
+                                <template x-if="formIsLocal">
+                                    <div>
+                                        <input x-model="mform.model" placeholder="an installed Ollama tag, e.g. qwen3:8b" class="fz-mono" style="width:100%;margin-top:4px;padding:7px 10px;border-radius:7px;background:#101416;border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px">
+                                        <div class="fz-mono" style="font-size:8.5px;color:#6f797d;margin-top:3px">the tag as the gateway sees it (`ollama list` on the gateway's Ollama host)</div>
+                                    </div>
+                                </template>
+                                <template x-if="!formIsLocal">
+                                    <div>
+                                        <input x-model="mform.model" :list="'gwmodels-'+mform.provider" placeholder="exact api id, e.g. gemini-flash-latest" class="fz-mono" style="width:100%;margin-top:4px;padding:7px 10px;border-radius:7px;background:#101416;border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px">
+                                        <datalist :id="'gwmodels-'+mform.provider">
+                                            <template x-for="mm in (formProvider.models||[])" :key="mm"><option :value="mm"></option></template>
+                                        </datalist>
+                                        <div class="fz-mono" style="font-size:8.5px;color:#6f797d;margin-top:3px">the provider's EXACT id — hyphens, no spaces</div>
+                                    </div>
+                                </template>
+                            </label>
+
+                            <label class="fz-mono" style="font-size:9.5px;color:#8a9499;display:block">Name <span style="color:#6f797d">(what you pick in the tier dropdowns)</span>
+                                <input x-model="mform.name" placeholder="e.g. local-standard · my-gpt" class="fz-mono" style="width:100%;margin-top:4px;padding:7px 10px;border-radius:7px;background:#101416;border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px">
+                            </label>
+
+                            <template x-if="formNeedsKey">
+                                <label class="fz-mono" style="font-size:9.5px;color:#8a9499;display:block">API key
+                                    <input type="password" x-model="mform.api_key" placeholder="paste key — blank = use the gateway's env key" class="fz-mono" style="width:100%;margin-top:4px;padding:7px 10px;border-radius:7px;background:#101416;border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px">
+                                </label>
+                            </template>
+
+                            <template x-if="formIsLocal">
+                                <div class="flex" style="gap:12px;align-items:flex-end">
+                                    <label class="fz-mono" style="font-size:9.5px;color:#8a9499;flex:1;display:block">Context (num_ctx)
+                                        <input type="number" x-model.number="mform.num_ctx" class="fz-mono" style="width:100%;margin-top:4px;padding:7px 10px;border-radius:7px;background:#101416;border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px">
+                                    </label>
+                                    <label class="fz-mono flex items-center" style="font-size:10px;color:#8a9499;gap:6px;padding-bottom:8px;cursor:pointer">
+                                        <input type="checkbox" x-model="mform.think" style="accent-color:#ea638c"> thinking
+                                    </label>
+                                </div>
+                            </template>
+
+                            <div class="flex items-center" style="gap:10px;margin-top:2px">
+                                <button type="button" @click="addModel()" :disabled="adding || !mform.name || !mform.model" class="fz-mono"
+                                        :style="{ opacity:(adding||!mform.name||!mform.model)?.5:1, cursor:(adding||!mform.name||!mform.model)?'default':'pointer', fontSize:'11px', fontWeight:'600', padding:'8px 15px', borderRadius:'8px', border:'1px solid rgba(255,217,218,.35)', background:'linear-gradient(145deg,#ea638c,#89023e)', color:'#fff' }"
+                                        x-text="adding ? 'Adding…' : 'Add model'"></button>
+                                <span class="fz-mono" style="font-size:9.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :style="{ color: (addMsg.includes('fail')||addMsg.includes('error')||addMsg.includes('exist'))?'#ff9b9b':'#5fdda5' }" x-text="addMsg"></span>
+                            </div>
+                        </div>
+                    </div>
+
                     {{-- Runtime + services (live/effective facts only; editable values live above) --}}
                     <div style="border-radius:13px;border:1px solid rgba(255,255,255,.07);background:#151a1c;padding:15px;display:flex;flex-direction:column;gap:11px">
                         <div class="fz-mono" style="font-size:9.5px;letter-spacing:.13em;color:#8a9499">RUNTIME</div>
                         <div class="fz-mono flex flex-col" style="gap:9px;font-size:10.5px">
-                            <div class="flex justify-between"><span style="color:#8a9499">version</span><span style="color:#a3adb1" x-text="status.version || '—'"></span></div>
-                            <div class="flex justify-between"><span style="color:#8a9499">driver</span><span style="color:#a3adb1" x-text="status.active_driver || '{{ $llmDriver }}'"></span></div>
+                            <div class="flex justify-between"><span style="color:#8a9499">driver</span><span style="color:#a3adb1">{{ $llmDriver }}</span></div>
                         </div>
                         <div style="padding-top:11px;border-top:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;gap:8px">
                             <div class="fz-mono" style="font-size:9.5px;letter-spacing:.13em;color:#8a9499">SERVICES</div>
@@ -206,18 +261,24 @@
 
 @push('scripts')
 <script>
-function ollama() {
+function toolsPanel() {
     const rawTools = @json(array_values($tools));
     const searchKeySet = @json($searchKeySet);
     const glyph = name => (String(name).split(/[._\s-]+/).map(w => w[0] || '').join('') || name.slice(0,2)).slice(0,2).toUpperCase();
 
     return {
-        status: @json($status),
-        models: @json($models),
-        running: @json($running),
         browser: @json($browser),
         sandbox: @json($sandbox),
         gateway: @json($gateway),
+        gatewayModels: @json($gatewayModels ?? []),
+        gatewayProviders: @json($gatewayProviders ?? []),
+        mform: { provider: 'ollama', model: '', name: '', api_key: '', num_ctx: {{ (int) config('litellm.ollama_default_num_ctx', 16384) }}, think: false },
+        adding: false,
+        addMsg: '',
+        modelHealth: {},        // name → 'up' | 'down'
+        modelHealthError: {},   // name → error string
+        healthMsg: '',
+        checkingHealth: false,
         filter: 'ALL',
         openSchema: {},
         testQuery: '', testResults: [], testError: '', testing: false,
@@ -225,9 +286,18 @@ function ollama() {
         start() { this.timer = setInterval(() => this.refresh(), 5000); },
         async refresh() {
             try {
-                const d = await (await fetch('{{ route('ui.ollama.status') }}')).json();
-                this.status = d.status; this.models = d.models; this.running = d.running; this.browser = d.browser; this.sandbox = d.sandbox; this.gateway = d.gateway;
+                const d = await (await fetch('{{ route('ui.tools.status') }}')).json();
+                this.browser = d.browser; this.sandbox = d.sandbox; this.gateway = d.gateway;
+                if (d.gatewayModels) this.gatewayModels = d.gatewayModels;
             } catch (e) {}
+        },
+
+        // Model chip health dot: grey (unknown) → green (up) / red (down); it blinks
+        // (via the chip's animation binding) while a health check is in flight.
+        dotColor(name) {
+            if (this.checkingHealth) return '#8a9499';
+            const s = this.modelHealth[name];
+            return s === 'up' ? '#3ecf8e' : s === 'down' ? '#ff6b6b' : '#5a6367';
         },
 
         get tools() {
@@ -240,31 +310,59 @@ function ollama() {
             const f = this.filter;
             return this.tools.filter(t => f === 'ALL' ? true : f === 'ACTIVE' ? !t.degraded : t.degraded);
         },
-        get residentModels() {
-            const running = new Set((this.running || []).map(r => r.name));
-            return (this.models || []).map(m => {
-                const on = running.has(m.name);
-                return {
-                    name: m.name, size: m.size,
-                    tag: on ? 'active' : (m.parameter_size || m.quantization || 'model'),
-                    dot: on ? '#3ecf8e' : '#5a6367',
-                    fg: on ? '#ffd9da' : '#c8d0d3',
-                    bg: on ? 'rgba(62,207,142,.07)' : 'rgba(255,255,255,.03)',
-                    bd: on ? 'rgba(62,207,142,.24)' : 'rgba(255,255,255,.06)',
-                };
-            });
-        },
         get services() {
             const s = [
-                { k: 'ollama',  ok: !!this.status.reachable,  url: this.status.base_url || '' },
                 { k: 'browser', ok: !!this.browser.reachable, url: this.browser.base_url || '' },
                 { k: 'sandbox', ok: !!this.sandbox.reachable, url: this.sandbox.base_url || '' },
             ];
             // Surface the gateway alongside the rest when it's in use or reachable.
             if (this.gateway && (this.gateway.is_active_driver || this.gateway.reachable)) {
-                s.splice(1, 0, { k: 'gateway', ok: !!this.gateway.reachable, url: this.gateway.base_url || '' });
+                s.splice(0, 0, { k: 'gateway', ok: !!this.gateway.reachable, url: this.gateway.base_url || '' });
             }
             return s;
+        },
+
+        async checkHealth() {
+            if (this.checkingHealth) return;
+            this.checkingHealth = true; this.healthMsg = '';   // chips start blinking grey
+            try {
+                const d = await window.postJson('{{ route('gateway.health') }}', {});
+                const mh = {}, me = {};
+                (d.models || []).forEach(h => { mh[h.model] = h.healthy ? 'up' : 'down'; if (h.error) me[h.model] = h.error; });
+                this.modelHealth = mh; this.modelHealthError = me;
+                this.healthMsg = d.error ? d.error : ((d.healthy || 0) + ' up · ' + (d.unhealthy || 0) + ' down');
+            } catch (e) { this.healthMsg = 'request failed'; }
+            finally { this.checkingHealth = false; }   // chips settle to green/red
+        },
+        get formProvider() { return this.gatewayProviders[this.mform.provider] || {}; },
+        get formIsLocal() { return !!this.formProvider.local; },
+        get formNeedsKey() { return !!this.formProvider.key_env; },
+        async addModel() {
+            const model = String(this.mform.model).trim();
+            const name = this.mform.name.trim();
+            if (this.adding || !name || !model) return;
+            if (/\s/.test(model)) { this.addMsg = 'model id has a space — use the exact id, e.g. gemini-flash-latest'; return; }
+            this.adding = true; this.addMsg = '';
+            try {
+                const d = await window.postJson('{{ route('gateway.models.create') }}', {
+                    name, provider: this.mform.provider, model,
+                    api_key: this.mform.api_key, num_ctx: this.mform.num_ctx, think: this.mform.think ? 1 : 0,
+                });
+                if (d.models) this.gatewayModels = d.models;
+                if (d.result && d.result.ok) { this.addMsg = 'added ' + name; this.mform.name = ''; this.mform.model = ''; this.mform.api_key = ''; }
+                else if (d.errors) { this.addMsg = Object.values(d.errors)[0][0]; }
+                else { this.addMsg = 'failed: ' + (d.result ? d.result.message : (d.message || 'error')); }
+            } catch (e) { this.addMsg = 'request failed'; }
+            finally { this.adding = false; }
+        },
+        async removeModel(name) {
+            if (!confirm('Remove "' + name + '" from the gateway?')) return;
+            this.addMsg = '';
+            try {
+                const d = await window.postJson('{{ route('gateway.models.delete') }}', { name });
+                if (d.models) this.gatewayModels = d.models;
+                this.addMsg = (d.result && d.result.ok) ? ('removed ' + name) : ('remove failed: ' + (d.result && d.result.message));
+            } catch (e) { this.addMsg = 'request failed'; }
         },
 
         async testBrowser() {

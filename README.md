@@ -13,6 +13,7 @@ chatbot — there is no back-and-forth after the initial goal.
 ## Table of contents
 
 - [How it works](#how-it-works)
+- [Configuration: `.env` vs the Settings UI](#configuration-env-vs-the-settings-ui)
 - [Run with Docker (everything included)](#run-with-docker-everything-included)
 - [LLM gateway & per-task routing (local + cloud)](#llm-gateway--per-task-routing-local--cloud)
 - [Checking LLM connectivity](#checking-llm-connectivity)
@@ -64,16 +65,20 @@ enforcing limits, recording the trace) is Laravel's job.
 ## Configuration: `.env` vs the Settings UI
 
 Only what's needed to **boot** lives in `.env`: the **database**, **Redis**, the
-queue/cache/session drivers, and `APP_KEY`. Everything else the agent needs —
-**LLM driver & model, API keys (Anthropic, Tavily, Brave, SerpAPI), Ollama and
-browser-service endpoints, the human's name, and safety limits** — is configured
-**after startup** on the dashboard's **⚙️ Settings** page and stored in the
-database (secrets encrypted).
+queue/cache/session drivers, `APP_KEY`, and the **LLM gateway** URL + key
+(`LLM_GATEWAY_URL`, `LLM_GATEWAY_KEY`). Everything else — the **default model &
+per-task tiers, search API keys (Tavily / Brave / SerpAPI), the human's name, and
+safety limits** — is configured **after startup** on the dashboard's **⚙️
+Settings** page and stored in the database (secrets encrypted).
+
+The app reaches models through exactly **one path — the LiteLLM gateway** (driver
+`openai_compatible`); there are no per-provider drivers in the app. Gateway
+models (local Ollama + cloud) are managed from **Settings ▸ Tools ▸ Gateway
+models** (below), and cloud **provider keys live in the gateway, not the app**.
 
 Settings apply **live**: the web app picks them up on the next request, and the
-worker re-applies them at the start of every iteration — so changing the model
-or adding a search key takes effect on the next step, **no restart**. The `.env`
-values for these are just first-run defaults.
+worker re-applies them at the start of every iteration — so changing the default
+model, a tier, or a search key takes effect on the next step, **no restart**.
 
 ## Run with Docker (everything included)
 
@@ -84,44 +89,53 @@ gets real GPU acceleration (a dockerized Ollama on macOS/Windows is CPU-only);
 the containers reach it via `host.docker.internal`.
 
 ```bash
-# 0. run Ollama natively and expose it to containers, then pull a model
-#    macOS: set the host binding once, then restart Ollama.app
+# 0. install Ollama (https://ollama.com), run it natively, expose it to
+#    containers, and pull the model(s) the default seed uses (see
+#    config/litellm.php — edit those tags to change them).
+#    macOS: set the host binding once, then restart Ollama.app.
 launchctl setenv OLLAMA_HOST "0.0.0.0:11434"
-ollama pull qwen3:8b
+ollama pull qwen3:8b          # local-fast
+ollama pull qwen3.5:latest    # local-standard + local-hard (the default tiers)
 
-# 1. build + start everything (Ollama is NOT a container by default)
+# 1. build + start everything (Ollama is NOT a container by default).
+#    Give the gateway ~30s on first run — it applies its DB migrations at boot.
 docker compose up -d --build
 
-# 2. verify the LLM wiring (host↔Ollama, gateway, container↔Ollama)
+# 2. SEED the gateway's local models — REQUIRED. The gateway starts EMPTY; this
+#    creates local-fast / local-standard / local-hard. (Add cloud models later
+#    from the dashboard: Settings ▸ Tools ▸ Gateway models.)
+docker compose exec app php artisan litellm:seed
+
+# 3. verify the whole LLM path (host↔Ollama, gateway, container↔Ollama)
 ./scripts/check-llm.sh
 
-# 3. start a research job
+# 4. start a research job and watch it
 docker compose exec app php artisan research:start "Determine whether Company X is a good supplier"
-
-# 4. watch the agent's path
 docker compose exec app php artisan research:trace <job-id>
 docker compose logs -f worker                            # live loop engine
 docker compose logs -f litellm                           # gateway / model routing
 ```
 
-The API is on **http://localhost:8080** (e.g. `POST /api/research`). What each
-service does:
+The dashboard/API is on **http://localhost:8080**; the gateway's **admin UI** is
+on **http://localhost:4000/ui** (login `LITELLM_UI_USERNAME` / `LITELLM_UI_PASSWORD`,
+default `admin` / `admin` — change them). What each service does:
 
 | Service | Role |
 |---|---|
-| `mysql` | all state: jobs, steps, tool executions, memory, **the event timeline**, humans |
+| `mysql` | all app state: jobs, steps, tool executions, memory, **the event timeline**, humans, settings |
 | `redis` | queue backend — the planner loop runs on the `research` queue |
-| `litellm` | **the LLM gateway/router** — fronts native Ollama + cloud providers behind one OpenAI-compatible endpoint (`:4000`) |
-| `init` | one-shot: `composer install`, `key:generate`, `migrate`, seed humans |
-| `app` | PHP-FPM serving the API |
+| `litellm` | **the LLM gateway/router** — one OpenAI-compatible endpoint (`:4000`) fronting native Ollama + cloud; has an **admin UI** at `/ui` |
+| `litellm-db` | Postgres backing the gateway's admin UI + DB-stored models/keys/spend |
+| `init` | one-shot: `composer install`, `key:generate`, `migrate`, seed the human (does **not** seed gateway models — see step 2) |
+| `app` | PHP-FPM serving the dashboard/API |
 | `nginx` | HTTP entrypoint on `:8080` |
 | `worker` | `queue:work --queue=research` — executes every iteration |
 | `scheduler` | `schedule:work` — re-evaluates the human-question queue every 10 min |
 | `ollama` *(opt-in)* | dockerized Ollama, **off by default**; `--profile ollama-docker` for Linux or a container-only setup |
 
-> **Prefer a dockerized Ollama?** `docker compose --profile ollama-docker up -d`
-> then set `OLLAMA_BASE_URL=http://ollama:11434` in the compose `x-app-env` /
-> `litellm` blocks. Pull into it with
+> **Prefer a dockerized Ollama?** `docker compose --profile ollama-docker up -d`,
+> then set `OLLAMA_BASE_URL=http://ollama:11434` on the **`litellm` service** in
+> `docker-compose.yml` (the app never talks to Ollama directly). Pull into it with
 > `docker compose --profile ollama-docker run --rm ollama-pull`. On macOS this is
 > CPU-only — native is recommended.
 
@@ -129,30 +143,37 @@ service does:
 
 ## LLM gateway & per-task routing (local + cloud)
 
-The agent talks to a **self-hosted [LiteLLM](https://github.com/BerriAI/litellm)
-gateway** (`driver = openai_compatible`), which routes a single OpenAI-compatible
-endpoint to **native Ollama AND cloud providers** (OpenAI, Anthropic, Gemini,
-DeepSeek). Local models run offline; cloud models activate only when you're
-online and that provider's key is set. It's generic OpenAI-compatible, so you can
-point it at LocalAI, vLLM, or OpenRouter instead by changing the URL.
+Every model call goes through a **self-hosted [LiteLLM](https://github.com/BerriAI/litellm)
+gateway** (`driver = openai_compatible`) — one OpenAI-compatible endpoint routing
+to **native Ollama AND cloud providers** (OpenAI, Anthropic, Gemini, DeepSeek).
+Local models run offline; cloud models activate only when you're online and their
+key is set. It's generic OpenAI-compatible, so you can point it at LocalAI, vLLM,
+or OpenRouter by changing `LLM_GATEWAY_URL`. The app only holds the gateway's own
+key (`LLM_GATEWAY_KEY`, which must equal `LITELLM_MASTER_KEY`); **provider keys
+live in the gateway**, not the app.
 
-Models are named in [`services/litellm/config.yaml`](services/litellm/config.yaml)
-— `local-fast` / `local-standard` / `local-hard` (Ollama) and `gpt-4o` / `claude`
-/ `gemini` / `deepseek` (cloud). **Edit the local tags to models you've actually
-`ollama pull`ed.** Provider keys live in the gateway's environment (the `litellm`
-service), not the app; the app only holds the gateway's own key
-(`LLM_GATEWAY_KEY`, which must equal `LITELLM_MASTER_KEY`).
+**Managing models — from the dashboard, not YAML.** Models are stored in the
+gateway's database (`store_model_in_db`) and managed at **Settings ▸ Tools ▸
+Gateway models**:
+- **Add** with the form — pick a provider (Ollama / OpenAI / Anthropic / Gemini /
+  DeepSeek), enter the exact model id, name it, and for cloud paste the API key
+  (stored encrypted in the gateway).
+- **Seed** the local defaults from the CLI: `php artisan litellm:seed` — creates
+  `local-fast` / `local-standard` / `local-hard` from
+  [`config/litellm.php`](config/litellm.php). (Edit the tags there to models
+  you've `ollama pull`ed.)
+- **Check health** with the button — a live up/down dot per model.
+- LiteLLM's own admin UI (`http://localhost:4000/ui`) manages the same
+  models/keys/spend. (`services/litellm/config.yaml` only holds gateway-wide
+  settings now; its `model_list` is empty.)
 
 **Per-task routing (no role→model hardcoding).** Each capability *tier* —
-`light` / `standard` / `hard` — maps to a gateway model name (⚙️ Settings, or
-`RESEARCH_LLM_TIER_*`). When a supervisor plans, it tags each task with a tier
-("how hard is this?"), and the worker for that task runs on that tier's model —
-so a hard task can burst to `claude` while everything else stays on a local
-model, per task. A blank tier falls back to the default model. The model + tier
-used are recorded in the trace and shown per-turn in the job-flow UI.
-
-The **Tools** tab shows a live **gateway card**: reachable/down, and the exact
-list of models it serves (the names a tier can point at).
+`light` / `standard` / `hard` — maps to a gateway model name (Settings ▸ Model
+tiers, or `RESEARCH_LLM_TIER_*`). When a supervisor plans, it tags each task with
+a tier ("how hard is this?"), and the worker for that task runs on that tier's
+model — so a hard task can burst to `claude` while everything else stays on a
+local model, per task. A blank tier falls back to the default model. The model +
+tier used are recorded in the trace and shown per-turn in the job-flow UI.
 
 ## Checking LLM connectivity
 
@@ -177,6 +198,10 @@ failed) when Docker isn't available.
 
 ## Quick start
 
+Running the app natively still needs the **LLM gateway** (the app has no direct
+model driver). Start the gateway + its DB with Docker even if you run the app on
+the host:
+
 ```bash
 composer install
 cp .env.example .env
@@ -185,6 +210,12 @@ php artisan key:generate
 # MySQL + Redis assumed (see .env). Then:
 php artisan migrate
 php artisan db:seed --class=Database\\Seeders\\HumanSeeder
+
+# Bring up the LiteLLM gateway (+ its Postgres) and seed the local models.
+# Ollama must be running natively (ollama serve) with a model pulled.
+docker compose up -d litellm litellm-db
+php artisan litellm:seed
+./scripts/check-llm.sh                 # confirm the gateway + models are reachable
 
 # Run a queue worker for the "research" queue (this is the loop engine):
 php artisan queue:work --queue=research
@@ -205,42 +236,39 @@ curl -X POST http://localhost/api/research \
 
 ## Running fully offline (Ollama)
 
-The agent runs against a **local, offline** model with zero cloud calls. Only
-the LLM adapter changes — the orchestrator, planner, tools, guardrails, and
-traces are identical.
+The agent runs **fully offline** with zero cloud calls — the LiteLLM gateway
+routes to local Ollama and never touches the network. Every model call goes
+through the gateway (there is one app driver, `openai_compatible`); the
+orchestrator, planner, tools, guardrails, and traces are identical.
 
 ```bash
-# 1. install Ollama (https://ollama.com), then pull a model:
-ollama pull qwen3:30b         # or qwen2.5, mistral-nemo, etc.
-ollama serve                  # usually already running on :11434
+# 1. install Ollama (https://ollama.com), pull the seed's models, expose it:
+ollama pull qwen3.5:latest    # local-standard + local-hard (the default tiers)
+ollama pull qwen3:8b          # local-fast  (edit tags in config/litellm.php)
+launchctl setenv OLLAMA_HOST "0.0.0.0:11434"   # macOS — then restart Ollama.app
 
-# 2. point the agent at it (.env):
-RESEARCH_LLM_DRIVER=ollama
-RESEARCH_LLM_MODEL=qwen3:30b
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_NUM_CTX=16384          # raise for longer research; costs RAM
-OLLAMA_FORCE_JSON=true        # constrain output to valid JSON (recommended)
-OLLAMA_THINK=false            # Qwen3 is a reasoning model — return JSON only
+# 2. start the stack (gateway included) and seed the local models:
+docker compose up -d --build
+docker compose exec app php artisan litellm:seed   # creates local-fast/standard/hard
+
+# 3. (optional) point the default model at a specific local one — Settings ▸ LLM,
+#    or RESEARCH_LLM_MODEL in .env. It already defaults to local-standard.
 ```
 
-That's it — `research:start` now runs entirely on your machine.
+That's it — `research:start` runs entirely on your machine, through the local
+gateway. **Add or edit models from the dashboard** (Settings ▸ Tools ▸ *Gateway
+models*): pick Ollama, choose an installed tag, name it. Cloud models are added
+the same way (pick a provider, paste a key) and activate only when you're online
+— see [LLM gateway & per-task routing](#llm-gateway--per-task-routing-local--cloud).
 
 **Notes for local models:**
 
-- `OLLAMA_FORCE_JSON=true` uses Ollama's structured-output mode so even smaller
-  models reliably honor the `Decision` JSON contract. The `DecisionParser`
-  still validates, and the orchestrator feeds any violation back for a retry.
-- Smaller models have smaller context windows. Lower `RESEARCH_TRANSCRIPT_WINDOW`
-  (and/or raise `OLLAMA_NUM_CTX`) if you see truncation on long runs.
-- Local inference is slower; `OLLAMA_TIMEOUT` (default 300s) covers that, and
-  the per-iteration queue job timeout is separate.
-
-This direct `ollama` driver is the simplest offline path (one box, one model).
-For **mixing local + cloud models per task**, use the `openai_compatible` driver
-in front of the LiteLLM gateway instead — see
-[LLM gateway & per-task routing](#llm-gateway--per-task-routing-local--cloud).
-Switching to a direct cloud model is still a one-line change:
-`RESEARCH_LLM_DRIVER=anthropic`.
+- Gateway models set `num_ctx` (default 16384) — Ollama's ~4k default truncates
+  the long agent prompts, so keep it high. Set it per-model in the add-model form.
+- `think` is per-model too: OFF for trivial tiers (fast), ON for the workhorse
+  (weak models need it for reliable tool-call JSON). The gateway forces a JSON
+  object either way, and `DecisionParser` validates.
+- Local inference is slower; the gateway request timeout covers that.
 
 ---
 
@@ -367,8 +395,8 @@ restart:
 docker compose up -d --build browser      # starts it on :3001
 ```
 
-Its health, endpoint, and a live test-search box are on the **Tools & Ollama**
-page. Native (no Docker):
+Its health, endpoint, and a live test-search box are on the **Tools**
+tab (under Settings). Native (no Docker):
 
 ```bash
 cd services/browser && npm install && node server.js    # serves on :3000
@@ -377,7 +405,8 @@ cd services/browser && npm install && node server.js    # serves on :3000
 
 > The browser tools drive public search/pages only. They do **not** automate
 > login-gated proprietary UIs (e.g. ChatGPT) — that violates those terms and
-> requires defeating bot-detection. For a free LLM, use the local Ollama driver.
+> requires defeating bot-detection. For a free LLM, use a local Ollama model
+> through the gateway.
 
 ## Building software (the code sandbox)
 
@@ -423,7 +452,7 @@ on your host, which is the whole point of running it in Docker.
 
 If the agent builds a handy reusable command, it can `save_custom_tool` (name +
 description + shell command) and later `run_custom_tool`. Saved skills appear on
-the **Tools & Ollama** page, where you can **Promote** the useful ones (a flag +
+the **Tools** tab, where you can **Promote** the useful ones (a flag +
 their exact command) so you can build them into the core as real `Tool` classes.
 
 > **Safety.** The sandbox runs arbitrary code by design — that isolation is the
@@ -526,5 +555,5 @@ app/
 ├── Infrastructure/Research/   # LLM client, tool implementations, Eloquent repositories
 ├── Jobs/  Events/  Listeners/ # queue + event-driven glue
 ├── Http/Controllers/          # start / trace / cancel / human answer
-└── Console/Commands/          # research:start, research:trace
+└── Console/Commands/          # research:start, research:trace, litellm:seed
 ```

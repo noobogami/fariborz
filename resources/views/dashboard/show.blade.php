@@ -322,7 +322,7 @@
                                             <div class="fz-mono flex flex-wrap" style="gap:18px;font-size:10px;color:#8a9499;border-top:1px solid rgba(255,255,255,.06);padding-top:10px;margin-top:12px">
                                                 <span x-text="'iteration ' + s.iteration"></span>
                                                 <span x-text="'latency ' + s.dur"></span>
-                                                <a :href="'/ui/api/events/' + s.id" target="_blank" style="margin-left:auto">raw event →</a>
+                                                <button @click.stop="showRaw(s.id)" type="button" style="margin-left:auto;background:none;border:none;padding:0;cursor:pointer;color:#ea638c;font:inherit">raw event →</button>
                                             </div>
                                         </div>
                                     </template>
@@ -435,6 +435,32 @@
             </div>
         </aside>
     </div>
+
+    {{-- RAW EVENT MODAL --}}
+    <template x-if="rawModal">
+        <div @click="rawModal = null" @keydown.escape.window="rawModal = null"
+             style="position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.62);backdrop-filter:blur(2px)">
+            <div @click.stop
+                 style="width:100%;max-width:760px;max-height:82vh;display:flex;flex-direction:column;border-radius:14px;background:#14181b;border:1px solid rgba(255,255,255,.1);box-shadow:0 24px 60px rgba(0,0,0,.55)">
+                <div class="flex items-center" style="gap:12px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.08)">
+                    <span class="fz-mono" style="font-size:10px;letter-spacing:.13em;color:#8a9499">RAW EVENT</span>
+                    <span class="fz-mono" style="font-size:10.5px;color:#5c666b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="rawModal.id"></span>
+                    <span class="flex items-center" style="margin-left:auto;gap:8px">
+                        <button @click="copyRaw()" type="button" class="fz-mono" style="font-size:10px;letter-spacing:.06em;padding:5px 11px;border-radius:8px;background:rgba(234,99,140,.1);border:1px solid rgba(234,99,140,.24);color:#ffb3c4;cursor:pointer">copy</button>
+                        <button @click="rawModal = null" type="button" class="fz-mono" style="font-size:14px;line-height:1;padding:4px 9px;border-radius:8px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#c8d0d3;cursor:pointer">✕</button>
+                    </span>
+                </div>
+                <div style="padding:14px 16px;overflow:auto">
+                    <template x-if="rawModal.loading">
+                        <div class="fz-mono" style="font-size:11px;color:#8a9499">loading…</div>
+                    </template>
+                    <template x-if="!rawModal.loading">
+                        <pre class="fz-mono fz-scroll" style="margin:0;font-size:11.5px;line-height:1.6;color:#9aa8ac;white-space:pre-wrap;word-break:break-word" x-text="rawModal.text"></pre>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </template>
 </div>
 
 @push('scripts')
@@ -505,6 +531,7 @@ function jobDetail() {
         extras: @json($initial['role_extras']),
         answers: {},
         payloads: {},
+        rawModal: null,
         open: {},
         taskOpen: {},
         live: true,
@@ -801,6 +828,17 @@ function jobDetail() {
             }
         },
         pretty(v) { return (typeof v === 'string') ? v : JSON.stringify(v, null, 2); },
+
+        async showRaw(id) {
+            this.rawModal = { id, loading: true, text: '' };
+            try {
+                const d = await (await fetch('/ui/api/events/' + id)).json();
+                if (this.rawModal && this.rawModal.id === id) { this.rawModal.text = JSON.stringify(d, null, 2); this.rawModal.loading = false; }
+            } catch (e) {
+                if (this.rawModal && this.rawModal.id === id) { this.rawModal.text = 'Failed to load event.'; this.rawModal.loading = false; }
+            }
+        },
+        copyRaw() { if (this.rawModal && this.rawModal.text) navigator.clipboard && navigator.clipboard.writeText(this.rawModal.text); },
 
         async refresh() {
             try {

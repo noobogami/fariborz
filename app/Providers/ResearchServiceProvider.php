@@ -12,6 +12,7 @@ use App\Application\Research\Guardrails\TimeoutGuardrail;
 use App\Application\Research\Planner\LlmPlanner;
 use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Research\Tracing\DbTraceRecorder;
+use App\Console\Commands\SeedLiteLLMModelsCommand;
 use App\Console\Commands\StartResearchCommand;
 use App\Console\Commands\TraceResearchCommand;
 use App\Domain\Research\Contracts\HumanQuestionRepository;
@@ -24,8 +25,6 @@ use App\Events\HumanAvailabilityChanged;
 use App\Events\HumanQuestionAnswered;
 use App\Events\ResearchCompleted;
 use App\Events\ResearchFailed;
-use App\Infrastructure\Research\Llm\AnthropicClient;
-use App\Infrastructure\Research\Llm\OllamaClient;
 use App\Infrastructure\Research\Llm\OpenAiCompatibleClient;
 use App\Infrastructure\Research\Persistence\EloquentHumanQuestionRepository;
 use App\Infrastructure\Research\Persistence\EloquentMemoryRepository;
@@ -126,16 +125,10 @@ class ResearchServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../../config/research.php', 'research');
 
         // Contracts → implementations (swap any of these without touching callers).
-        // The LLM driver is chosen at runtime so the SAME agent runs either
-        // against a cloud model or fully offline via Ollama — nothing else changes.
-        $this->app->bind(LlmClient::class, fn ($app) => match (config('research.llm.driver')) {
-            'ollama' => $app->make(OllamaClient::class),
-            'anthropic' => $app->make(AnthropicClient::class),
-            'openai_compatible' => $app->make(OpenAiCompatibleClient::class),
-            default => throw new \InvalidArgumentException(
-                'Unknown research.llm.driver: '.config('research.llm.driver')
-            ),
-        });
+        // EVERY model call goes through the self-hosted LiteLLM gateway (local
+        // Ollama + cloud, behind one OpenAI-compatible endpoint). There is no
+        // longer a per-provider driver in the app — the gateway does the routing.
+        $this->app->bind(LlmClient::class, OpenAiCompatibleClient::class);
         $this->app->bind(Planner::class, LlmPlanner::class);
         $this->app->bind(TraceRecorder::class, DbTraceRecorder::class);
         $this->app->bind(ResearchJobRepository::class, EloquentResearchJobRepository::class);
@@ -174,6 +167,7 @@ class ResearchServiceProvider extends ServiceProvider
             $this->commands([
                 StartResearchCommand::class,
                 TraceResearchCommand::class,
+                SeedLiteLLMModelsCommand::class,
             ]);
         }
 

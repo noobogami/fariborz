@@ -71,19 +71,15 @@ return [
     |--------------------------------------------------------------------------
     */
     'llm' => [
-        // 'ollama' (fully local/offline), 'anthropic' (direct cloud), or
-        // 'openai_compatible' (a self-hosted gateway like LiteLLM that routes to
-        // BOTH local models and cloud providers — the recommended way to mix
-        // offline + cloud models per task).
-        'driver' => env('RESEARCH_LLM_DRIVER', 'ollama'),
-        // The DEFAULT model, used when no tier override applies.
-        //   ollama:            a pulled tag like "qwen3:8b".
-        //   anthropic:         a model id like "claude-opus-4-8".
-        //   openai_compatible: whatever the gateway calls the model. With the
-        //                      shipped LiteLLM config these are "local-standard",
-        //                      "local-fast", "local-hard", "gpt-4o", "claude",
-        //                      "gemini", "deepseek", … (see services/litellm).
-        'model' => env('RESEARCH_LLM_MODEL', 'claude-opus-4-8'),
+        // The app speaks to ONE thing — the self-hosted LiteLLM gateway (driver
+        // 'openai_compatible'), which routes to local Ollama AND cloud providers.
+        // There are no per-provider drivers in the app anymore; this stays only so
+        // the dashboard can label the active path.
+        'driver' => 'openai_compatible',
+        // The DEFAULT model, used when no tier override applies. It is a GATEWAY
+        // model name (managed in Settings ▸ Tools ▸ Gateway models), e.g.
+        // "local-standard", "local-fast", "gpt-4o", "claude", … (see config/litellm).
+        'model' => env('RESEARCH_LLM_MODEL', 'local-standard'),
         'max_tokens' => env('RESEARCH_LLM_MAX_TOKENS', 4096),
         'temperature' => env('RESEARCH_LLM_TEMPERATURE', 0.2),
         // Keep at most this many transcript messages verbatim; older ones get summarized.
@@ -140,21 +136,8 @@ return [
             'referer' => env('LLM_GATEWAY_REFERER', ''),
             'title' => env('LLM_GATEWAY_TITLE', 'Fariborz'),
         ],
-
-        // Local, offline inference via Ollama (used when driver = ollama).
-        'ollama' => [
-            'base_url' => env('OLLAMA_BASE_URL', 'http://localhost:11434'),
-            'num_ctx' => env('OLLAMA_NUM_CTX', 16384),     // context window in tokens
-            'keep_alive' => env('OLLAMA_KEEP_ALIVE', '30m'),  // how long to keep the model loaded
-            'request_timeout' => env('OLLAMA_TIMEOUT', 600),       // large local models can be slow
-            // Constrain output to valid JSON — strongly recommended so local
-            // models reliably honor the Decision contract.
-            'force_json' => env('OLLAMA_FORCE_JSON', true),
-            // Qwen3 (and other reasoning models) emit <think>…</think> blocks by
-            // default, which break JSON parsing. Disable thinking so the reply is
-            // the JSON decision only. Harmlessly ignored by non-thinking models.
-            'think' => env('OLLAMA_THINK', false),
-        ],
+        // (Ollama's connection is the GATEWAY's concern — set OLLAMA_BASE_URL on the
+        // litellm service, not here. Fariborz no longer talks to Ollama directly.)
     ],
 
     /*

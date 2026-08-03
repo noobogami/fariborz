@@ -2,9 +2,9 @@
 
 use App\Http\Controllers\Dashboard\DashboardController;
 use App\Http\Controllers\Dashboard\HumanController;
-use App\Http\Controllers\Dashboard\OllamaController;
 use App\Http\Controllers\Dashboard\SandboxController;
 use App\Http\Controllers\Dashboard\SettingsController;
+use App\Http\Controllers\Dashboard\ToolsController;
 use App\Http\Controllers\DevNotes\DevNotesController;
 use Illuminate\Support\Facades\Route;
 
@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
 Route::get('/jobs/{id}', [DashboardController::class, 'show'])->name('jobs.show');
 Route::get('/humans', [HumanController::class, 'index'])->name('humans');
-// Tools & Ollama moved under Settings; keep the old URL working as a redirect
+// Tools & Gateway moved under Settings; keep the old URL working as a redirect
 // straight to the Tools section anchor.
 Route::get('/tools', fn () => redirect()->to(route('settings').'#tools'))->name('tools');
 Route::get('/sandbox', [SandboxController::class, 'index'])->name('sandbox');
@@ -29,17 +29,19 @@ Route::post('/jobs/{id}/retry', [DashboardController::class, 'retry'])->name('jo
 Route::delete('/jobs/{id}', [DashboardController::class, 'destroy'])->name('jobs.destroy');
 Route::post('/humans/{id}/status', [HumanController::class, 'updateStatus'])->name('humans.status');
 Route::post('/questions/{id}/answer', [HumanController::class, 'answer'])->name('questions.answer');
-Route::post('/tools/ollama/pull', [OllamaController::class, 'pull'])->name('ollama.pull');
-Route::post('/tools/browser/test', [OllamaController::class, 'browserTest'])->name('browser.test');
-Route::post('/tools/skills/{id}/promote', [OllamaController::class, 'promoteSkill'])->name('skills.promote');
-Route::delete('/tools/skills/{id}', [OllamaController::class, 'deleteSkill'])->name('skills.delete');
+Route::post('/tools/browser/test', [ToolsController::class, 'browserTest'])->name('browser.test');
+Route::post('/tools/skills/{id}/promote', [ToolsController::class, 'promoteSkill'])->name('skills.promote');
+Route::delete('/tools/skills/{id}', [ToolsController::class, 'deleteSkill'])->name('skills.delete');
+Route::post('/tools/gateway/models', [ToolsController::class, 'gatewayCreate'])->name('gateway.models.create');
+Route::post('/tools/gateway/models/remove', [ToolsController::class, 'gatewayDelete'])->name('gateway.models.delete');
+Route::post('/tools/gateway/health', [ToolsController::class, 'gatewayHealth'])->name('gateway.health');
 
 // ── JSON endpoints used by the UI for live polling ───────────────────────────
 Route::prefix('ui/api')->group(function () {
     Route::get('/jobs', [DashboardController::class, 'jobsJson'])->name('ui.jobs');
     Route::get('/jobs/{id}', [DashboardController::class, 'jobJson'])->name('ui.job');
     Route::get('/events/{id}', [DashboardController::class, 'eventJson'])->name('ui.event');
-    Route::get('/ollama/status', [OllamaController::class, 'status'])->name('ui.ollama.status');
+    Route::get('/tools/status', [ToolsController::class, 'status'])->name('ui.tools.status');
     Route::get('/sandbox/processes', [SandboxController::class, 'processesJson'])->name('ui.sandbox.processes');
 });
 

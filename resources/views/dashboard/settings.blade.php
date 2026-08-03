@@ -102,7 +102,7 @@
                     <a href="#tools" @click="$store.settings.active = 'tools'" class="flex items-center"
                        style="gap:9px;padding:7px 9px;border-radius:9px;font-size:12.5px;text-decoration:none"
                        :style="{ border: '1px solid '+($store.settings.active==='tools'?'rgba(234,99,140,.24)':'transparent'), background: $store.settings.active==='tools'?'linear-gradient(90deg,rgba(234,99,140,.16),rgba(234,99,140,.02))':'transparent', color: $store.settings.active==='tools'?'#ffd9da':'#98a2a7' }">
-                        <span>Tools &amp; Ollama</span>
+                        <span>Tools &amp; Gateway</span>
                     </a>
                 </div>
                 <div style="margin-top:14px;padding:11px;border-radius:11px;border:1px solid rgba(255,255,255,.07);background:#1a1f21;display:flex;flex-direction:column;gap:8px" class="fz-mono">
@@ -172,11 +172,13 @@
                                     {{-- dropdown (dynamic model list from the LiteLLM gateway) --}}
                                     <template x-if="f.control === 'select'">
                                         <div style="position:relative;flex:1;min-width:0">
-                                            <select @change="$store.settings.set(f, $event.target.value)" x-effect="$el.value = $store.settings.cur(f)" class="fz-mono"
+                                            <select @change="$store.settings.set(f, $event.target.value)"
+                                                    x-init="$nextTick(() => { $el.value = $store.settings.cur(f) })"
+                                                    x-effect="$store.settings.cur(f); $nextTick(() => { $el.value = $store.settings.cur(f) })" class="fz-mono"
                                                     style="width:100%;padding:8px 30px 8px 11px;border-radius:8px;background:#101416;font-size:11.5px;appearance:none;-webkit-appearance:none;cursor:pointer"
                                                     :style="{ border: '1px solid '+(f.edited?'rgba(242,182,97,.4)':'rgba(255,255,255,.1)'), color: f.edited?'#f7e2c2':'#e4e9ea' }">
                                                 <template x-for="o in f.options" :key="o">
-                                                    <option :value="o" x-text="o==='' ? '— use default model —' : o" style="background:#101416;color:#e4e9ea"></option>
+                                                    <option :value="o" :selected="String($store.settings.cur(f)) === String(o)" x-text="o==='' ? '— use default model —' : o" style="background:#101416;color:#e4e9ea"></option>
                                                 </template>
                                             </select>
                                             <span class="fz-mono" style="position:absolute;right:11px;top:50%;transform:translateY(-50%);pointer-events:none;font-size:9px;color:#8a9499">▾</span>
@@ -228,7 +230,7 @@
                 </template>
               </form>
 
-              {{-- ── Ollama & Tools (operational, non-editable) ─────────────── --}}
+              {{-- ── Gateway & Tools (operational, non-editable) ────────────── --}}
               @include('dashboard.partials.tools')
             </div>
         </div>
