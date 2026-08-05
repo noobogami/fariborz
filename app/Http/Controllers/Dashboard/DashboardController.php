@@ -360,6 +360,7 @@ class DashboardController extends Controller
                 'failed' => $tasks->where('status', TaskStatus::Failed)->count(),
                 'in_progress' => $tasks->where('status', TaskStatus::InProgress)->count(),
                 'awaiting_review' => $tasks->where('status', TaskStatus::AwaitingReview)->count(),
+                'reviewing' => $tasks->where('status', TaskStatus::Reviewing)->count(),
             ];
 
             $out['workers'] = $job->children()->latest('created_at')->get()->map(function (ResearchJob $w) use ($tasks) {

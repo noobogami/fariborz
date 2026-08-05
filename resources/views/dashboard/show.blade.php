@@ -510,6 +510,11 @@ function jobDetail() {
         input:{ nodeBg:'linear-gradient(145deg,rgba(234,99,140,.22),rgba(137,2,62,.3))', nodeBd:'rgba(255,217,218,.4)', nodeFg:'#ffd9da', nodeGlow:'0 0 16px rgba(234,99,140,.28)',
                 cardBg:'linear-gradient(90deg,rgba(234,99,140,.1),#1a1f21)', cardBd:'rgba(234,99,140,.3)', toolFg:'#ffb3c4',
                 chipBg:'rgba(234,99,140,.16)', chipFg:'#ffd9da', chipBd:'rgba(234,99,140,.4)', anim:'none' },
+        // Distinct from `live` (worker producing) and `warn` (awaiting a verdict):
+        // a violet "someone is inspecting this right now" tone for a Reviewer agent.
+        review:{ nodeBg:'rgba(168,127,249,.16)', nodeBd:'rgba(201,166,255,.4)', nodeFg:'#c9a6ff', nodeGlow:'0 0 16px rgba(168,127,249,.32)',
+                cardBg:'linear-gradient(90deg,rgba(168,127,249,.1),#1a1f21)', cardBd:'rgba(168,127,249,.32)', toolFg:'#dcc7ff',
+                chipBg:'rgba(168,127,249,.16)', chipFg:'#d9c2ff', chipBd:'rgba(168,127,249,.4)', anim:'breathe 1.8s ease-in-out infinite' },
     };
     const STATUS = { live:'RUNNING', err:'ERROR', warn:'WAIT', think:'THINK', ok:'OK', input:'PROMPT' };
     // task status → tone + label
@@ -517,6 +522,7 @@ function jobDetail() {
         pending:         { tone: Object.assign({}, TONES.think, { nodeBg:'#20262a', nodeBd:'rgba(255,255,255,.1)', nodeFg:'#8a9499', chipBg:'rgba(255,255,255,.05)', chipFg:'#9aa8ac', chipBd:'rgba(255,255,255,.11)', titleFg:'#98a2a7', row:'transparent' }), label:'PENDING' },
         in_progress:     { tone: Object.assign({}, TONES.live, { titleFg:'#ffd9da', row:'rgba(234,99,140,.07)' }), label:'IN PROGRESS' },
         awaiting_review: { tone: Object.assign({}, TONES.warn, { titleFg:'#f2d3a0', row:'rgba(242,182,97,.04)' }), label:'AWAITING REVIEW' },
+        reviewing:       { tone: Object.assign({}, TONES.review, { titleFg:'#e4d4ff', row:'rgba(168,127,249,.05)' }), label:'REVIEWING' },
         done:            { tone: Object.assign({}, TONES.ok,   { nodeFg:'#5fdda5', titleFg:'#c8d0d3', row:'transparent' }), label:'DONE' },
         failed:          { tone: Object.assign({}, TONES.err,  { titleFg:'#ffb0b0', row:'rgba(255,107,107,.04)' }), label:'FAILED' },
     };
@@ -553,7 +559,7 @@ function jobDetail() {
             window.addEventListener('job-refresh', () => this.refresh());
             this._openNewest();
             // open the in-progress task by default
-            (this.extras.tasks || []).forEach(t => { if (t.status === 'in_progress') this.taskOpen[t.seq] = true; });
+            (this.extras.tasks || []).forEach(t => { if (['in_progress', 'reviewing'].includes(t.status)) this.taskOpen[t.seq] = true; });
         },
         _openNewest() {
             const s = this.simpleSteps;
@@ -654,6 +660,7 @@ function jobDetail() {
             const bits = [c.done + ' of ' + c.total + ' done'];
             if (c.in_progress) bits.push(c.in_progress + ' in progress');
             if (c.awaiting_review) bits.push(c.awaiting_review + ' awaiting review');
+            if (c.reviewing) bits.push(c.reviewing + ' reviewing');
             if (c.failed) bits.push(c.failed + ' failed');
             return bits.join(' · ');
         },
@@ -661,7 +668,7 @@ function jobDetail() {
             return (this.extras.tasks || []).map(t => {
                 const tt = taskTone(t.status);
                 return { ...t, tone: tt.tone, statusLabel: tt.label,
-                    resultLabel: t.status === 'failed' ? 'WORKER FAILURE' : t.status === 'in_progress' ? 'WORKER PROGRESS' : t.status === 'pending' ? 'STATE' : 'WORKER RESULT' };
+                    resultLabel: t.status === 'failed' ? 'WORKER FAILURE' : t.status === 'in_progress' ? 'WORKER PROGRESS' : t.status === 'pending' ? 'STATE' : t.status === 'reviewing' ? 'UNDER REVIEW' : 'WORKER RESULT' };
             });
         },
         toggleTask(seq) { this.taskOpen[seq] = !this.taskOpen[seq]; },
@@ -681,7 +688,10 @@ function jobDetail() {
             const w = this.workers;
             const running = w.filter(x => ['running','in_progress'].includes(x.status)).length;
             const review = (this.extras.tasks || []).filter(t => t.status === 'awaiting_review').length;
-            return running + ' running' + (review ? ' · ' + review + ' awaiting review' : '');
+            const reviewing = (this.extras.tasks || []).filter(t => t.status === 'reviewing').length;
+            return running + ' running'
+                + (review ? ' · ' + review + ' awaiting review' : '')
+                + (reviewing ? ' · ' + reviewing + ' reviewing' : '');
         },
 
         // ── header helpers ──────────────────────────────────────────────────

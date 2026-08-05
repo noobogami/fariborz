@@ -2,6 +2,7 @@
 
 namespace App\Application\Research\Planner;
 
+use App\Domain\Research\Enums\JobRole;
 use App\Domain\Research\ValueObjects\ResearchContext;
 
 /**
@@ -16,7 +17,11 @@ class PromptBuilder
 {
     public function system(ResearchContext $ctx): string
     {
-        return $ctx->isSupervisor() ? $this->supervisorSystem($ctx) : $this->workerSystem($ctx);
+        return match (true) {
+            $ctx->isSupervisor() => $this->supervisorSystem($ctx),
+            $ctx->role === JobRole::Reviewer => $this->reviewerSystem($ctx),
+            default => $this->workerSystem($ctx),
+        };
     }
 
     /**
@@ -92,16 +97,17 @@ class PromptBuilder
            files" then "start the server on a published port and verify it responds". Call
            plan_tasks once up front; call again only to add or fix tasks.
            {$tiers}
-        2. review_task — whenever a task is awaiting review, VERIFY it: read_file / list_files
-           its actual output FIRST, then accept only if it truly satisfies the brief (right
-           length, real content, NO leftover scaffolding like "CURRENT STATE"/JSON, server
-           actually reachable); otherwise revise with SPECIFIC notes and it re-runs
-           automatically. Reviewing is your MAIN job — always prefer reviewing an awaiting task
-           over anything else, and a task is NOT done until you accept it.
-        3. finish — ONLY when every task is Done. The deliverable must actually EXIST: for
-           content, assemble the real files; for a served app, the server must be RUNNING and
-           verified (report the live URL). Put the real result / URL in `report` — never a
-           description of what was done.
+        2. review_task — whenever a task is awaiting review, VERIFY it. When a worker finishes,
+           the system loads its declared output FILE(S) and shows their real content to you in
+           the observation — review THAT directly; you do NOT need read_file unless a file is
+           missing. Accept only if it truly satisfies the brief (right length, real content, NO
+           leftover scaffolding like "CURRENT STATE"/JSON, server actually reachable); otherwise
+           revise with SPECIFIC notes and it re-runs automatically. Reviewing is your MAIN job —
+           always prefer reviewing an awaiting task over anything else, and a task is NOT done
+           until you accept it.
+        3. finish — the system finishes the project FOR YOU once every task is settled, so you
+           rarely call this. Focus on reviewing; assembling/deploying the deliverable is itself
+           a task you plan and delegate, not something you do at finish.
 
         If nothing is awaiting review and tasks are still running, there is nothing for you to
         do: the system is waiting on workers and will re-wake you when one reports back.
@@ -304,10 +310,67 @@ class PromptBuilder
         PROMPT;
     }
 
+    /**
+     * The REVIEWER brain: a fresh, focused agent that verifies ONE finished task
+     * against its brief and submits a structured verdict. It never does the
+     * work, writes files, or plans anything — its tiny context (just this one
+     * task, seeded as its goal) is what makes reviewing parallelizable and cheap
+     * compared to routing everything through the supervisor's own, ever-growing
+     * transcript.
+     */
+    private function reviewerSystem(ResearchContext $ctx): string
+    {
+        $tools = json_encode($ctx->toolDefs, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $today = now()->format('l, j F Y');
+
+        return <<<PROMPT
+        You are a REVIEWER — a fresh, focused agent whose ONLY job is to verify ONE finished
+        task from a larger project against its brief, then submit a verdict. You do not do the
+        work, write files, plan anything, or answer to the user. The user will NOT answer
+        follow-up questions in chat.
+
+        TODAY'S DATE IS {$today}. Trust it over anything you remember.
+
+        You operate in a loop. Your first message (the goal) gives you the task, its declared
+        deliverable(s), facts already checked deterministically, and the worker's self-report.
+        Each turn, respond with EXACTLY ONE JSON object — a tool call, including submit_review.
+
+        RESPONSE CONTRACT — valid JSON only, no prose, no code fences:
+        To use a tool:       {"thought":"<brief reasoning>","action":"tool","tool":"<name>","arguments":{...}}
+        To submit a verdict: {"thought":"<why>","action":"tool","tool":"submit_review","arguments":{"verdict":"accept"|"revise","notes":"...","confidence":<0.0-1.0>}}
+        "action" is ALWAYS the literal string "tool" — never a tool name, and never "finish". You
+        have NO finish action; submit_review IS a tool call, and calling it ends your run.
+        WRONG: {"action":"finish",...}  WRONG: {"action":"submit_review",...}
+        RIGHT: {"action":"tool","tool":"submit_review","arguments":{"verdict":"accept","notes":"..."}}
+
+        BE STRICT — do not accept a self-report:
+        - The worker's own claim of success is NOT evidence. VERIFY with your tools: read_file the
+          real declared output(s), read_webpage a served URL if one is claimed reachable,
+          run_command to run tests or count required units (words/paragraphs/chapters), and look
+          for leftover scaffolding (a raw JSON blob, "CURRENT STATE", template placeholders like
+          "chapter N goes here").
+        - Some facts are already ESTABLISHED for you deterministically before you were even
+          started (e.g. "the declared file exists and is non-empty") — trust those; spend your
+          turns on the RICH/SUBJECTIVE judgment a file-exists check cannot make: is it actually
+          GOOD, complete, and correct against the brief?
+        - "accept" only when the deliverable genuinely satisfies the brief. Otherwise "revise"
+          with SPECIFIC, actionable notes — vague notes ("make it better") produce another vague
+          result from the next attempt.
+        - You have a small, bounded budget. Verify efficiently, then submit_review — do not keep
+          re-checking the same thing.
+
+        AVAILABLE TOOLS:
+        {$tools}
+        PROMPT;
+    }
+
     public function stateUser(ResearchContext $ctx): string
     {
         if ($ctx->isSupervisor()) {
             return $this->supervisorState($ctx);
+        }
+        if ($ctx->role === JobRole::Reviewer) {
+            return $this->reviewerState($ctx);
         }
 
         $max = $ctx->job->limit('max_iterations');
@@ -336,7 +399,7 @@ class PromptBuilder
     {
         $glyph = [
             'pending' => '○ TODO', 'in_progress' => '▷ RUNNING', 'awaiting_review' => '★ REVIEW',
-            'done' => '✔ DONE', 'failed' => '✗ FAILED',
+            'reviewing' => '⧗ REVIEWING', 'done' => '✔ DONE', 'failed' => '✗ FAILED',
         ];
 
         // Which pending tasks are READY to delegate now (all deps Done) vs BLOCKED.
@@ -362,8 +425,8 @@ class PromptBuilder
 
         $counts = collect($ctx->tasks)->countBy('status');
         $summary = $ctx->tasks
-            ? sprintf('%d task(s): %d done, %d awaiting review, %d running, %d todo, %d failed',
-                count($ctx->tasks), $counts['done'] ?? 0, $counts['awaiting_review'] ?? 0,
+            ? sprintf('%d task(s): %d done, %d awaiting review, %d being reviewed, %d running, %d todo, %d failed',
+                count($ctx->tasks), $counts['done'] ?? 0, $counts['awaiting_review'] ?? 0, $counts['reviewing'] ?? 0,
                 $counts['in_progress'] ?? 0, $counts['pending'] ?? 0, $counts['failed'] ?? 0)
             : 'no plan yet';
 
@@ -439,6 +502,21 @@ class PromptBuilder
         }
 
         return $out."\n";
+    }
+
+    /** Per-turn state for a reviewer — its goal already carries the whole brief. */
+    private function reviewerState(ResearchContext $ctx): string
+    {
+        $max = $ctx->job->limit('max_iterations');
+
+        return <<<PROMPT
+        CURRENT STATE
+        =============
+        Iteration: {$ctx->iteration} of max {$max}
+
+        Verify the task with your tools, then call submit_review with your verdict (accept or
+        revise) and specific notes. Respond with JSON only.
+        PROMPT;
     }
 
     public function bestEffort(string $reason): string

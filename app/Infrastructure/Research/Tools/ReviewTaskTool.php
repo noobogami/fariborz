@@ -2,8 +2,7 @@
 
 namespace App\Infrastructure\Research\Tools;
 
-use App\Application\Research\Sandbox\SandboxClient;
-use App\Application\Research\Sandbox\SandboxException;
+use App\Application\Research\Tools\ArtifactChecks;
 use App\Domain\Research\Contracts\ControlTool;
 use App\Domain\Research\Enums\TaskStatus;
 use App\Domain\Research\ValueObjects\ResearchContext;
@@ -14,20 +13,22 @@ use App\Models\ResearchTask;
 /**
  * SUPERVISOR tool. Verify a finished worker's result against the task's brief.
  * Accept it (task done) or send it back to be re-done with specific notes. This
- * is the quality gate that keeps the deliverable aligned to the goal.
+ * is the FALLBACK quality gate — the primary path is a dedicated Reviewer agent
+ * (see SubmitReviewTool, ResearchOrchestrator::autoDispatchReviews); this tool
+ * only runs a task through the supervisor's own judgment when reviewing is
+ * disabled or a reviewer agent failed/produced no verdict.
  *
  * Accept is NOT a rubber-stamp: before a task can be marked Done, the tool checks
  * that the task's DECLARED OUTPUT FILES actually exist in the shared workspace
- * with real content. A weak supervisor tends to accept a worker's self-report
- * ("UI deployed successfully") without ever reading the artifact — this guard
- * turns that claim into a fact that must be true on disk, or accept is refused.
+ * with real content (ArtifactChecks — the same deterministic pre-gate used
+ * before a Reviewer agent is even spawned). A weak supervisor tends to accept a
+ * worker's self-report ("UI deployed successfully") without ever reading the
+ * artifact — this guard turns that claim into a fact that must be true on disk,
+ * or accept is refused.
  */
 class ReviewTaskTool implements ControlTool
 {
-    /** Trimmed content shorter than this (chars) counts as "essentially empty". */
-    private const MIN_CONTENT_CHARS = 30;
-
-    public function __construct(private SandboxClient $sandbox) {}
+    public function __construct(private ArtifactChecks $checks) {}
 
     public function name(): string
     {
@@ -82,7 +83,7 @@ class ReviewTaskTool implements ControlTool
             // Acceptance check: the declared deliverables must really exist with
             // real content. This is the automated gate that replaces "trust the
             // worker's self-report".
-            $verdict = $this->verifyOutputs($ctx->workspaceId(), $task);
+            $verdict = $this->checks->verifyOutputs($ctx->workspaceId(), $task);
 
             if ($verdict['problems']) {
                 return ToolResult::fail(
@@ -118,63 +119,5 @@ class ReviewTaskTool implements ControlTool
             "Sent task #{$seq} back to be re-done. delegate_task it again to run a fresh worker with your notes.",
             ['task' => $seq, 'verdict' => 'revise']
         );
-    }
-
-    /**
-     * Check each declared output path exists in the workspace with real content.
-     *
-     * Returns ['problems' => string[], 'verified' => string[]]. `problems` is
-     * empty when there is nothing blocking acceptance. The check FAILS CLOSED on
-     * real evidence (a 404 / empty file is a genuine problem) but FAILS OPEN on
-     * infrastructure trouble (sandbox unreachable) so a sandbox outage can never
-     * wedge every review — we simply can't verify, so we don't block.
-     *
-     * @return array{problems: list<string>, verified: list<string>}
-     */
-    private function verifyOutputs(string $workspace, ResearchTask $task): array
-    {
-        $paths = array_values(array_filter(
-            array_map('trim', (array) ($task->outputs ?? [])),
-            fn ($p) => is_string($p) && $p !== '' && $p !== '...'
-                // Skip directory markers and glob placeholders — we can only
-                // meaningfully read concrete files back.
-                && ! str_ends_with($p, '/') && ! str_contains($p, '*'),
-        ));
-
-        // No concrete file deliverable declared (e.g. a pure research task) —
-        // nothing to verify, so don't stand in the way of acceptance.
-        if (! $paths) {
-            return ['problems' => [], 'verified' => []];
-        }
-
-        $problems = [];
-        $verified = [];
-
-        foreach ($paths as $path) {
-            try {
-                $r = $this->sandbox->read($workspace, $path);
-            } catch (SandboxException $e) {
-                // The sandbox reachably reported the file isn't there (404) —
-                // that's real evidence the deliverable is missing.
-                $problems[] = "\"{$path}\" was not found in the workspace (worker never wrote it).";
-
-                continue;
-            } catch (\Throwable $e) {
-                // Sandbox unreachable / transport error — cannot verify. Fail open:
-                // abandon the whole check rather than block review on infra trouble.
-                return ['problems' => [], 'verified' => []];
-            }
-
-            $content = trim((string) ($r['content'] ?? ''));
-            if ($content === '') {
-                $problems[] = "\"{$path}\" exists but is empty.";
-            } elseif (mb_strlen($content) < self::MIN_CONTENT_CHARS) {
-                $problems[] = "\"{$path}\" is essentially empty (".mb_strlen($content).' chars).';
-            } else {
-                $verified[] = $path.' ('.mb_strlen($content).' chars)';
-            }
-        }
-
-        return ['problems' => $problems, 'verified' => $verified];
     }
 }

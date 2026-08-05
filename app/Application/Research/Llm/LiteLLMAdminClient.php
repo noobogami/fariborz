@@ -194,6 +194,31 @@ class LiteLLMAdminClient
         }
     }
 
+    /**
+     * Probe a SINGLE model's availability — the cheap counterpart to health().
+     * LiteLLM's /health accepts a ?model= filter, so this tests just one endpoint
+     * instead of sweeping (and spending quota on) every model. Used on the hot
+     * path to decide whether a model is usable before assigning it to an agent.
+     * Fails OPEN (returns true) when the gateway itself can't be reached — an
+     * infra outage must not wedge every assignment; only a model the gateway
+     * REPORTS as unhealthy returns false.
+     */
+    public function isModelHealthy(string $model): bool
+    {
+        try {
+            $res = $this->req()->timeout(30)->get($this->root().'/health', ['model' => $model]);
+            if (! $res->successful()) {
+                return true;   // gateway trouble — cannot disprove availability, fail open
+            }
+
+            $unhealthy = (int) ($res->json('unhealthy_count') ?? 0);
+
+            return $unhealthy === 0;
+        } catch (Throwable) {
+            return true;   // unreachable — fail open
+        }
+    }
+
     /** Pull the human-readable bit out of LiteLLM's verbose error+stacktrace blob. */
     private function healthError(string $raw): string
     {

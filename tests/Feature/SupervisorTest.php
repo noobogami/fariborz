@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Application\Research\Llm\ModelAvailability;
 use App\Application\Research\ResearchOrchestrator;
 use App\Application\Research\Sandbox\SandboxClient;
 use App\Application\Research\StartResearch;
+use App\Application\Research\Tools\ArtifactChecks;
 use App\Application\Research\Tools\ToolRegistry;
 use App\Domain\Research\Contracts\LlmClient;
 use App\Domain\Research\Enums\JobRole;
@@ -55,6 +57,27 @@ class SupervisorTest extends TestCase
         $this->assertContains('browser_search', $worker);
         $this->assertNotContains('delegate_task', $worker);  // workers can't delegate
         $this->assertNotContains('plan_tasks', $worker);
+    }
+
+    public function test_reviewer_tool_gate_is_read_only_plus_submit_review(): void
+    {
+        $reg = app(ToolRegistry::class);
+        $names = collect($reg->definitions(null, JobRole::Reviewer))->pluck('name');
+
+        $this->assertContains('submit_review', $names);
+        $this->assertContains('read_file', $names);
+        $this->assertContains('list_files', $names);
+        $this->assertContains('run_command', $names);
+        $this->assertContains('container_logs', $names);
+        $this->assertContains('list_processes', $names);
+
+        // Never "do the work" or other control tools.
+        $this->assertNotContains('write_file', $names);
+        $this->assertNotContains('plan_tasks', $names);
+        $this->assertNotContains('delegate_task', $names);
+        $this->assertNotContains('review_task', $names);
+        $this->assertNotContains('start_server', $names);
+        $this->assertNotContains('browser_search', $names);
     }
 
     public function test_orchestrator_auto_delegates_ready_tasks_without_the_model(): void
@@ -254,6 +277,341 @@ class SupervisorTest extends TestCase
         $this->assertSame(0, ResearchJob::where('parent_job_id', $job->id)->count(), 'no new worker spawned');
     }
 
+    public function test_supervisor_finishes_deterministically_when_all_tasks_are_settled(): void
+    {
+        // Every task terminal (Done/Failed) → Fariborz assembles the report in code
+        // and completes, WITHOUT an LLM finish turn. The scripted LLM would throw a
+        // parse error if consulted (it's not a valid decision), proving no LLM call.
+        Queue::fake();
+        $this->app->instance(LlmClient::class, new FakeLlmClient(['not-json — must never be read']));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]); // skip comprehension turn
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Chapter', 'brief' => 'b',
+            'status' => TaskStatus::Done, 'depends_on' => [], 'result' => 'the chapter text', 'outputs' => ['chapter.md']]);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 2, 'title' => 'Broken', 'brief' => 'b',
+            'status' => TaskStatus::Failed, 'depends_on' => [], 'result' => ResearchTask::WORKER_ERROR_PREFIX.'429']);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $job->refresh();
+        $this->assertSame(JobStatus::Completed, $job->status);
+        $this->assertStringContainsString('Chapter', (string) $job->final_report);
+        $this->assertStringContainsString('did not complete', (string) $job->final_report); // the Failed task is flagged honestly
+    }
+
+    public function test_completed_worker_no_longer_eagerly_injects_the_artifact_then_a_reviewer_is_spawned(): void
+    {
+        // The OLD eager artifact-load on every worker completion is gone — a
+        // dedicated Reviewer agent now reads the real files itself. This test
+        // proves BOTH halves: no injection right after the worker completes, and
+        // the very next orchestrator turn deterministically spawns a Reviewer
+        // (task → Reviewing) once the pre-gate passes.
+        Queue::fake();
+        Http::fake(['*/read*' => Http::response(['content' => "<h1>ONCE UPON A TIME</h1>\nreal page markup"])]);
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]); // skip comprehension
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Page', 'brief' => 'build it',
+            'status' => TaskStatus::InProgress, 'outputs' => ['index.html']]);
+        $worker = ResearchJob::create(['goal' => 'task', 'role' => JobRole::Worker, 'parent_job_id' => $job->id,
+            'status' => JobStatus::Completed, 'config' => [], 'final_report' => 'I built the page']);
+        $task->update(['child_job_id' => $worker->id]);
+
+        app(ResumeSupervisorOnChildDone::class)->handleCompleted(new ResearchCompleted($worker->id));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::AwaitingReview, $task->status);
+        $observation = $job->messages()->get()->pluck('content')->implode("\n");
+        $this->assertStringNotContainsString('ONCE UPON A TIME', $observation, 'no eager artifact injection any more');
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Reviewing, $task->status, 'the pre-gate passed and a reviewer was spawned');
+        $reviewer = ResearchJob::where('parent_job_id', $job->id)->where('role', JobRole::Reviewer)->first();
+        $this->assertNotNull($reviewer);
+        $this->assertSame($task->id, $reviewer->config['review_task_id']);
+    }
+
+    public function test_pregate_rejects_a_missing_output_and_revises_without_spawning_a_reviewer(): void
+    {
+        // The deterministic pre-gate may only REJECT — a provably missing/empty
+        // declared output sends the task straight back to revise, with no
+        // reviewer agent spawned at all (that would be pure waste).
+        Queue::fake();
+        Http::fake(['*/read*' => Http::response(['error' => 'ENOENT'], 404)]);
+        $this->app->instance(LlmClient::class, new FakeLlmClient([['action' => 'finish', 'report' => 'x', 'confidence' => 0.3]]));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]);
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::AwaitingReview, 'result' => 'done!', 'outputs' => ['ui/index.html']]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Pending, $task->status);
+        $this->assertStringContainsString('REVISION NEEDED', $task->brief);
+        $this->assertSame(0, ResearchJob::where('parent_job_id', $job->id)->where('role', JobRole::Reviewer)->count());
+    }
+
+    public function test_reviewer_spawn_routes_around_a_model_in_cooldown(): void
+    {
+        // The reviewer's INTENDED tier (here: default_tier, since reviewer_tier
+        // and the task's own tier are both blank) resolves to a model already in
+        // cooldown — the spawn must land on an available alternative tier instead
+        // of the dead one (which would just fail again and dump onto the
+        // supervisor's review_task fallback).
+        Queue::fake();
+        config([
+            'research.llm.tiers.standard.model' => 'dead-model',
+            'research.llm.tiers.light.model' => 'dead-model', // also the dead model → must be skipped
+            'research.llm.tiers.hard.model' => 'cloud-model',
+            'research.llm.default_tier' => 'standard',
+            'research.supervisor.reviewer_tier' => '',
+        ]);
+        // Single Http::fake call covers both the sandbox artifact read (pre-gate)
+        // AND the single-model health probe for the replacement — Http::fake
+        // MERGES stubs across calls, but a second call is unnecessary here.
+        Http::fake([
+            '*/read*' => Http::response(['content' => str_repeat('<div>real content</div>', 5)]),
+            '*/health*' => Http::response(['healthy_count' => 1, 'unhealthy_count' => 0]),
+        ]);
+
+        app(ModelAvailability::class)->markUnavailable('dead-model', '429 too many requests');
+
+        $job = $this->supervisor();
+        $job->update(['requirements' => ['restatement' => 'x']]);
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::AwaitingReview, 'result' => 'done!', 'outputs' => ['ui/index.html']]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Reviewing, $task->status, 'the pre-gate passed and a reviewer was spawned');
+        $reviewer = ResearchJob::where('parent_job_id', $job->id)->where('role', JobRole::Reviewer)->first();
+        $this->assertNotNull($reviewer);
+        $this->assertSame('hard', $reviewer->config['tier'], 'routed to the available tier, not the throttled default');
+    }
+
+    public function test_reviewer_disabled_leaves_task_for_the_supervisor_fallback(): void
+    {
+        Queue::fake();
+        config(['research.supervisor.reviewer_enabled' => false]);
+        Http::fake(['*/read*' => Http::response(['content' => str_repeat('<div>real content</div>', 5)])]);
+        $this->app->instance(LlmClient::class, new FakeLlmClient([['action' => 'finish', 'report' => 'x', 'confidence' => 0.5]]));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]);
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::AwaitingReview, 'result' => 'done!', 'outputs' => ['ui/index.html']]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::AwaitingReview, $task->status, 'left for the supervisor LLM fallback, unchanged path');
+        $this->assertSame(0, ResearchJob::where('parent_job_id', $job->id)->count());
+    }
+
+    public function test_reviewing_task_counts_as_in_flight_and_blocks_deterministic_finish(): void
+    {
+        Queue::fake();
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'A', 'brief' => 'b',
+            'status' => TaskStatus::Done, 'depends_on' => [], 'result' => 'x']);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 2, 'title' => 'B', 'brief' => 'b',
+            'status' => TaskStatus::Reviewing, 'depends_on' => []]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $job->refresh();
+        $this->assertNotSame(JobStatus::Completed, $job->status, 'must not finish while a reviewer is running');
+        $this->assertSame('awaiting_worker', $job->current_activity);
+        $this->assertTrue($job->supervisorShouldWait(), 'a Reviewing task is in-flight, just like InProgress');
+    }
+
+    public function test_reviewer_accept_marks_the_task_done(): void
+    {
+        Queue::fake();
+        $job = $this->supervisor();
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::Reviewing, 'result' => 'done!']);
+        $reviewer = ResearchJob::create(['goal' => 'review', 'role' => JobRole::Reviewer, 'parent_job_id' => $job->id,
+            'status' => JobStatus::Completed, 'config' => ['review_task_id' => $task->id],
+            'review_verdict' => ['verdict' => 'accept', 'notes' => 'looks good', 'confidence' => 0.9]]);
+
+        app(ResumeSupervisorOnChildDone::class)->handleCompleted(new ResearchCompleted($reviewer->id));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Done, $task->status);
+        Queue::assertPushed(AdvanceResearchJob::class, fn ($j) => $j->jobId === $job->id);
+    }
+
+    public function test_reviewer_revise_sends_the_task_back_with_notes(): void
+    {
+        Queue::fake();
+        $job = $this->supervisor();
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::Reviewing, 'result' => 'done!', 'attempts' => 1]);
+        $reviewer = ResearchJob::create(['goal' => 'review', 'role' => JobRole::Reviewer, 'parent_job_id' => $job->id,
+            'status' => JobStatus::Completed, 'config' => ['review_task_id' => $task->id],
+            'review_verdict' => ['verdict' => 'revise', 'notes' => 'missing footer', 'confidence' => 0.4]]);
+
+        app(ResumeSupervisorOnChildDone::class)->handleCompleted(new ResearchCompleted($reviewer->id));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Pending, $task->status);
+        $this->assertStringContainsString('missing footer', $task->brief);
+        // Revising does not itself bump attempts — only (re)delegation does, so a
+        // task's total tries stay bounded by the SAME max_task_attempts cap
+        // whether it was revised by a worker failure or a reviewer.
+        $this->assertSame(1, $task->attempts);
+    }
+
+    public function test_reviewer_with_no_verdict_falls_back_to_supervisor_review_with_artifact(): void
+    {
+        // The reviewer finished (e.g. ran out of turns) without ever calling
+        // submit_review — fall back to the supervisor's own review_task, WITH
+        // the real artifact injected (the eager-load helper moved here).
+        Queue::fake();
+        $sandbox = new class extends SandboxClient
+        {
+            public function __construct() {}
+
+            public function read(string $job, string $path): array
+            {
+                return ['content' => "REAL PAGE CONTENT for {$path}"];
+            }
+        };
+        $this->app->instance(SandboxClient::class, $sandbox);
+
+        $job = $this->supervisor();
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::Reviewing, 'result' => 'done!', 'outputs' => ['index.html']]);
+        $reviewer = ResearchJob::create(['goal' => 'review', 'role' => JobRole::Reviewer, 'parent_job_id' => $job->id,
+            'status' => JobStatus::Completed, 'config' => ['review_task_id' => $task->id], 'final_report' => 'gave up']);
+
+        app(ResumeSupervisorOnChildDone::class)->handleCompleted(new ResearchCompleted($reviewer->id));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::AwaitingReview, $task->status);
+        $observation = $job->messages()->get()->pluck('content')->implode("\n");
+        $this->assertStringContainsString('REAL PAGE CONTENT', $observation);
+        $this->assertStringContainsString('without a verdict', $observation);
+        Queue::assertPushed(AdvanceResearchJob::class, fn ($j) => $j->jobId === $job->id);
+    }
+
+    public function test_reviewer_crash_falls_back_to_supervisor_review_not_a_worker_redo(): void
+    {
+        // A crashed/unavailable reviewer is NOT evidence against the worker's
+        // task — it must fall back to AwaitingReview, never back to Pending
+        // (which would needlessly re-run the worker).
+        Queue::fake();
+        $job = $this->supervisor();
+        $task = ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'UI', 'brief' => 'build ui',
+            'status' => TaskStatus::Reviewing, 'result' => 'done!']);
+        $reviewer = ResearchJob::create(['goal' => 'review', 'role' => JobRole::Reviewer, 'parent_job_id' => $job->id,
+            'status' => JobStatus::Failed, 'config' => ['review_task_id' => $task->id]]);
+
+        app(ResumeSupervisorOnChildDone::class)->handleFailed(new ResearchFailed($reviewer->id, 'gateway 503'));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::AwaitingReview, $task->status, 'falls back, does not redo the worker');
+        Queue::assertPushed(AdvanceResearchJob::class, fn ($j) => $j->jobId === $job->id);
+    }
+
+    public function test_submit_review_tool_records_the_verdict_on_its_own_job(): void
+    {
+        $job = ResearchJob::create(['goal' => 'review task', 'role' => JobRole::Reviewer, 'status' => JobStatus::Running, 'config' => []]);
+
+        $res = app(ToolRegistry::class)->get('submit_review')->execute(
+            new ToolArguments(['verdict' => 'accept', 'notes' => 'checked the file, it is real', 'confidence' => 0.8]),
+            $this->ctx($job)
+        );
+
+        $this->assertTrue($res->success);
+        $job->refresh();
+        $this->assertSame('accept', $job->review_verdict['verdict']);
+        $this->assertSame('checked the file, it is real', $job->review_verdict['notes']);
+        $this->assertEqualsWithDelta(0.8, $job->review_verdict['confidence'], 0.001);
+    }
+
+    public function test_orchestrator_ends_the_reviewer_run_when_submit_review_is_called(): void
+    {
+        // submit_review is a normal TOOL CALL, not a "finish" action — but calling
+        // it must still end the reviewer's job deterministically (the orchestrator
+        // decides, not the model).
+        Queue::fake();
+        $this->app->instance(LlmClient::class, new FakeLlmClient([
+            ['thought' => 'looks right', 'action' => 'tool', 'tool' => 'submit_review',
+                'arguments' => ['verdict' => 'accept', 'notes' => 'verified', 'confidence' => 0.7]],
+        ]));
+
+        $owner = $this->supervisor();
+        $task = ResearchTask::create(['research_job_id' => $owner->id, 'seq' => 1, 'title' => 'T', 'brief' => 'b']);
+        $reviewer = ResearchJob::create([
+            'goal' => 'review it', 'role' => JobRole::Reviewer, 'status' => JobStatus::Running,
+            'config' => ['review_task_id' => $task->id],
+        ]);
+
+        app(ResearchOrchestrator::class)->advance($reviewer->id);
+
+        $reviewer->refresh();
+        $this->assertSame(JobStatus::Completed, $reviewer->status);
+        $this->assertSame('accept', $reviewer->review_verdict['verdict']);
+        $this->assertEqualsWithDelta(0.7, $reviewer->confidence, 0.001);
+    }
+
+    public function test_availability_failure_hands_the_task_to_an_available_model(): void
+    {
+        // A retry that failed on an availability error (429) is routed off the dead
+        // model onto an available tier's model — deterministically, no LLM.
+        Queue::fake();
+        config([
+            'research.llm.tiers.hard.model' => 'cloud-model',
+            'research.llm.tiers.standard.model' => 'local-model',
+            'research.llm.tiers.light.model' => 'cloud-model', // also the dead model → must be skipped
+        ]);
+        // The single-model health probe for the replacement reports it up.
+        Http::fake(['*/health*' => Http::response(['healthy_count' => 1, 'unhealthy_count' => 0])]);
+
+        $job = $this->supervisor();
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Assemble', 'brief' => 'b',
+            'status' => TaskStatus::Pending, 'tier' => 'hard', 'depends_on' => [], 'attempts' => 1,
+            'result' => ResearchTask::WORKER_ERROR_PREFIX.'litellm.RateLimitError: 429 too many requests']);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $task = ResearchTask::where('research_job_id', $job->id)->where('seq', 1)->first();
+        $this->assertSame('standard', $task->tier, 'the task was handed to the available tier');
+        $this->assertSame(TaskStatus::InProgress, $task->status, 'and re-delegated immediately');
+    }
+
+    public function test_approach_failure_gets_a_corrective_guideline_for_the_retry(): void
+    {
+        // A NON-availability failure runs one bounded FailureDiagnosis turn; its
+        // guidance is stored on the task and reaches the next worker's brief.
+        Queue::fake();
+        config(['research.supervisor.diagnose_failures' => true]);
+        $this->app->instance(LlmClient::class, new FakeLlmClient([[
+            'diagnosis' => 'the worker emitted a bare tool payload with no action wrapper',
+            'decision' => 'retry_with_guidance',
+            'guidance' => 'Respond with ONE JSON object wrapped in {"action":"tool",...}.',
+        ]]));
+
+        $job = $this->supervisor();
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Write', 'brief' => 'b',
+            'status' => TaskStatus::Pending, 'depends_on' => [], 'attempts' => 1,
+            'result' => ResearchTask::WORKER_ERROR_PREFIX.'invalid_llm_response: not a JSON object with an action field']);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $task = ResearchTask::where('research_job_id', $job->id)->where('seq', 1)->first();
+        $this->assertStringContainsString('action', (string) $task->retry_guidance, 'the corrective guideline was stored');
+    }
+
     public function test_review_accept_and_revise(): void
     {
         $job = $this->supervisor();
@@ -322,7 +680,7 @@ class SupervisorTest extends TestCase
                 throw new \RuntimeException('connection refused');
             }
         };
-        $tool = new ReviewTaskTool($sandbox);
+        $tool = new ReviewTaskTool(new ArtifactChecks($sandbox));
 
         $job = $this->supervisor();
         $task = ResearchTask::create([

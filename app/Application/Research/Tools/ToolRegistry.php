@@ -43,8 +43,12 @@ class ToolRegistry
 
     /**
      * The catalogue handed to the LLM prompt, gated by ROLE:
-     *   - Supervisor sees ONLY control tools (plan/delegate/review) + ask_human —
-     *     it plans and delegates, it never does the low-level work itself.
+     *   - Supervisor sees ONLY control tools (plan/review) + ask_human + read-only
+     *     verify tools — it plans and delegates, it never does the low-level work
+     *     itself. (delegate_task is deterministic — the orchestrator does it —
+     *     so the model never even sees it.)
+     *   - Reviewer sees ONLY read/verify tools + submit_review — it judges ONE
+     *     finished task, it can never write files or touch control tools.
      *   - Solo/Worker see every NON-control tool — they do the actual work.
      * Optionally further restricted to a job's allow-list.
      *
@@ -62,7 +66,17 @@ class ToolRegistry
         $supervisorExtras = ['ask_human', 'read_file', 'list_files', 'container_logs', 'list_processes'];
         $supervisorHidden = ['delegate_task'];
 
-        $tools = array_filter($tools, function (Tool $t) use ($role, $supervisorExtras, $supervisorHidden) {
+        // A reviewer's job is bounded even further: VERIFY one task, then
+        // submit_review. It gets read/verify tools only — never write_file,
+        // plan_tasks, delegate_task, review_task, or anything else that DOES work
+        // rather than judging it.
+        $reviewerAllow = ['submit_review', 'read_file', 'list_files', 'run_command', 'container_logs', 'list_processes', 'read_webpage'];
+
+        $tools = array_filter($tools, function (Tool $t) use ($role, $supervisorExtras, $supervisorHidden, $reviewerAllow) {
+            if ($role === JobRole::Reviewer) {
+                return in_array($t->name(), $reviewerAllow, true);
+            }
+
             $isControl = $t instanceof ControlTool;
 
             return $role === JobRole::Supervisor

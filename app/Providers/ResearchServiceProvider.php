@@ -51,6 +51,7 @@ use App\Infrastructure\Research\Tools\SandboxInfoTool;
 use App\Infrastructure\Research\Tools\SaveCustomToolTool;
 use App\Infrastructure\Research\Tools\StackOverflowTool;
 use App\Infrastructure\Research\Tools\StartServerTool;
+use App\Infrastructure\Research\Tools\SubmitReviewTool;
 use App\Infrastructure\Research\Tools\TavilySearchTool;
 use App\Infrastructure\Research\Tools\WikipediaTool;
 use App\Infrastructure\Research\Tools\WriteFileTool;
@@ -96,6 +97,8 @@ class ResearchServiceProvider extends ServiceProvider
         PlanTasksTool::class,
         DelegateTaskTool::class,
         ReviewTaskTool::class,
+        // ── Reviewer control tool (role-gated: only reviewers see this) ───────
+        SubmitReviewTool::class,
     ];
 
     /**

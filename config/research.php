@@ -52,6 +52,34 @@ return [
         // force-accepted as best-effort so the project can finish. Deterministic —
         // the escape does not depend on the weak model noticing it's stuck.
         'max_task_attempts' => env('RESEARCH_SUPERVISOR_MAX_TASK_ATTEMPTS', 3),
+
+        // When a worker fails, run ONE bounded FailureDiagnosis turn to decide how
+        // to retry — add a corrective guideline to the next worker, or re-run it
+        // clean. Availability failures (rate-limit / gateway down) skip the LLM and
+        // are handled deterministically (reassign to an available model). Off =
+        // every failure is a plain clean retry (the older behaviour).
+        'diagnose_failures' => env('RESEARCH_SUPERVISOR_DIAGNOSE_FAILURES', true),
+
+        // Health-aware model assignment. Before a worker is (re)assigned a model,
+        // the orchestrator skips any model in an availability cooldown and hands the
+        // task to an available one. A model enters cooldown when a job of its own
+        // fails with an availability error (rate-limit / timeout / 5xx / empty
+        // completion) — learned from real failures, no polling. Seconds.
+        'model_unavailable_cooldown' => env('RESEARCH_MODEL_UNAVAILABLE_COOLDOWN', 120),
+
+        // Per-task REVIEWER agents. When a task finishes and passes the
+        // deterministic pre-gate (its declared output(s) exist & are non-empty —
+        // ArtifactChecks), the orchestrator spawns a dedicated Reviewer agent in a
+        // fresh, tiny context to judge it, instead of routing every review through
+        // the supervisor's own (ever-growing) transcript. Off = the old behaviour:
+        // every AwaitingReview task is left for the supervisor's review_task turn.
+        'reviewer_enabled' => env('RESEARCH_SUPERVISOR_REVIEWER_ENABLED', true),
+        // Tier override for reviewers specifically. Blank = use the TASK's own
+        // tier (the same model that did the work also judges it, by default).
+        'reviewer_tier' => env('RESEARCH_SUPERVISOR_REVIEWER_TIER', ''),
+        // A reviewer's budget: verifying is cheaper than producing, so this is
+        // deliberately small — a handful of read/verify calls, then submit_review.
+        'reviewer_max_iterations' => env('RESEARCH_SUPERVISOR_REVIEWER_MAX_ITERATIONS', 8),
     ],
 
     /*

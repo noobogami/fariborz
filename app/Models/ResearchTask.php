@@ -41,6 +41,24 @@ class ResearchTask extends Model
         'outputs' => 'array',
     ];
 
+    /**
+     * True when this task's last outcome was a WORKER FAILURE (its `result` carries
+     * the error prefix) rather than a produced artifact — i.e. the pending task in
+     * hand is a RETRY of a failure, not a first attempt or a review revision.
+     */
+    public function lastAttemptFailed(): bool
+    {
+        return str_starts_with((string) $this->result, self::WORKER_ERROR_PREFIX);
+    }
+
+    /** The bare failure reason (error prefix stripped), or '' if the last outcome wasn't a failure. */
+    public function failureReason(): string
+    {
+        return $this->lastAttemptFailed()
+            ? trim(substr((string) $this->result, strlen(self::WORKER_ERROR_PREFIX)))
+            : '';
+    }
+
     /** True if every task this one depends on is in the given set of Done seqs. */
     public function isReady(array $doneSeqs): bool
     {

@@ -45,6 +45,7 @@ class ResearchJob extends Model
         'config' => 'array',
         'requirements' => 'array',
         'confidence' => 'float',
+        'review_verdict' => 'array',
         'partial' => 'boolean',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
@@ -114,8 +115,10 @@ class ResearchJob extends Model
 
     /**
      * Whether the supervisor should PARK (stop looping) and just wait: it only
-     * waits when workers are in flight AND there is nothing it could do right now
-     * — no task awaiting review, and no pending task whose dependencies are met.
+     * waits when workers OR reviewers are in flight AND there is nothing it could
+     * do right now — no task awaiting review, and no pending task whose
+     * dependencies are met. A task being Reviewing counts as in-flight (a
+     * reviewer agent owns it right now) exactly like InProgress does.
      *
      * @param  Collection<int,ResearchTask>|null  $tasks
      */
@@ -125,7 +128,7 @@ class ResearchJob extends Model
         $done = $tasks->where('status', TaskStatus::Done)->pluck('seq')->map(fn ($s) => (int) $s)->all();
 
         $hasReviewable = $tasks->contains(fn ($t) => $t->status === TaskStatus::AwaitingReview);
-        $inFlight = $tasks->contains(fn ($t) => $t->status === TaskStatus::InProgress);
+        $inFlight = $tasks->contains(fn ($t) => in_array($t->status, [TaskStatus::InProgress, TaskStatus::Reviewing], true));
         $hasReadyPending = $tasks->contains(fn ($t) => $t->status === TaskStatus::Pending && $t->isReady($done));
 
         return $inFlight && ! $hasReviewable && ! $hasReadyPending;

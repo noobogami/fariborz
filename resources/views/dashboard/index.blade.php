@@ -199,7 +199,7 @@ function jobsList() {
         cancelled: { bg:'rgba(255,255,255,.06)', fg:'#a3adb1', bd:'rgba(255,255,255,.12)', anim:'none', row:'transparent' },
     };
     const fallback = { bg:'rgba(255,255,255,.06)', fg:'#a3adb1', bd:'rgba(255,255,255,.12)', anim:'none', row:'transparent' };
-    const TASK_SEG = { pending:'rgba(255,255,255,.12)', in_progress:'#ea638c', awaiting_review:'#f2b661', done:'#3ecf8e', failed:'#ff6b6b' };
+    const TASK_SEG = { pending:'rgba(255,255,255,.12)', in_progress:'#ea638c', awaiting_review:'#f2b661', reviewing:'#a87ff9', done:'#3ecf8e', failed:'#ff6b6b' };
     return {
         jobs: @json($jobs),
         tab: 'ALL',
