@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Application\Research\Llm\LiteLLMAdminClient;
+use App\Application\Research\Llm\ModelCatalog;
 use Illuminate\Console\Command;
 
 /**
@@ -23,7 +24,7 @@ class SeedLiteLLMModelsCommand extends Command
 
     protected $description = "Seed Fariborz's default LOCAL models (config/litellm.php) into the gateway (DB-backed)";
 
-    public function handle(LiteLLMAdminClient $client): int
+    public function handle(LiteLLMAdminClient $client, ModelCatalog $catalog): int
     {
         $defaults = collect((array) config('litellm.defaults', []));
         $names = (array) $this->argument('names');
@@ -72,6 +73,8 @@ class SeedLiteLLMModelsCommand extends Command
             $this->outcome($name, $r);
             $ok += $r['ok'] ? 1 : 0;
         }
+
+        $catalog->forget();   // the gateway's catalogue just changed
 
         $this->newLine();
         $this->info(($this->option('delete') ? 'Deleted' : 'Created')." {$ok} model(s). Serving now: ".implode(', ', $client->names()));

@@ -82,7 +82,7 @@ class SettingsService
                 'type' => 'string',
                 'dynamic' => 'gateway_models',   // controller turns this into a live dropdown
                 'allow_blank' => true,           // blank = fall back to the default model
-                'help' => trim((string) ($meta['hint'] ?? '')).' — blank = default model; gateway names e.g. local-fast, local-hard, gpt-4o, claude',
+                'help' => trim((string) ($meta['hint'] ?? '')).' — blank = default model. Names come from the gateway (Tools ▸ Gateway models).',
             ];
         }
 

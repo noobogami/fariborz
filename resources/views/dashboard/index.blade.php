@@ -60,7 +60,7 @@
                 </div>
                 <div class="flex items-center" style="gap:8px">
                     <span class="fz-mono" style="font-size:10px;letter-spacing:.1em;color:#8a9499">MODEL</span>
-                    <div class="fz-mono" style="padding:7px 11px;border-radius:8px;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.09);color:#e4e9ea;font-size:12px">{{ config('research.llm.model') }}</div>
+                    <div class="fz-mono" style="padding:7px 11px;border-radius:8px;background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.09);color:#e4e9ea;font-size:12px">{{ app(\App\Application\Research\Llm\ModelCatalog::class)->displayModel() }}</div>
                 </div>
                 <button type="submit" style="margin-left:auto;font-size:13px;font-weight:600;padding:10px 22px;border-radius:10px;border:1px solid rgba(255,217,218,.35);background:linear-gradient(145deg,#ea638c,#89023e);color:#fff;cursor:pointer;box-shadow:0 10px 26px -12px rgba(234,99,140,.9)"
                         onmouseover="this.style.filter='brightness(1.1)'" onmouseout="this.style.filter='none'">Start research →</button>
@@ -106,7 +106,19 @@
                                             <span class="fz-mono" style="flex:0 0 auto;font-size:8.5px;letter-spacing:.1em;padding:2px 7px;border-radius:5px;background:rgba(234,99,140,.14);border:1px solid rgba(234,99,140,.34);color:#ffb3c4">SUPERVISED</span>
                                         </template>
                                     </div>
-                                    <div class="fz-mono" style="font-size:9.5px;color:#8a9499;margin-top:4px" x-text="(j.slug || ('job_' + String(j.id).slice(-8))) + supNote(j)"></div>
+                                    <div class="fz-mono flex flex-wrap items-center" style="gap:7px;font-size:9.5px;color:#8a9499;margin-top:4px">
+                                        <span x-text="(j.slug || ('job_' + String(j.id).slice(-8))) + supNote(j)"></span>
+                                        <template x-if="j.workspace_slug">
+                                            <a :href="'{{ route('sandbox') }}?job=' + encodeURIComponent(j.workspace_slug)" title="Open this job's sandbox workspace"
+                                               style="flex:0 0 auto;font-size:8.5px;letter-spacing:.05em;padding:2px 7px;border-radius:5px;background:rgba(234,99,140,.1);border:1px solid rgba(234,99,140,.3);color:#ffb3c4;text-decoration:none"
+                                               x-text="'⌗ ' + j.workspace_slug"></a>
+                                        </template>
+                                        <template x-if="j.workspace_slug">
+                                            <a :href="'{{ url('/sandbox/preview') }}/' + encodeURIComponent(j.workspace_slug) + '/'" target="_blank" rel="noopener"
+                                               title="View this workspace's index.html in the browser"
+                                               style="flex:0 0 auto;font-size:8.5px;letter-spacing:.05em;padding:2px 7px;border-radius:5px;background:rgba(62,207,142,.1);border:1px solid rgba(62,207,142,.3);color:#5fdda5;text-decoration:none">▶ PREVIEW</a>
+                                        </template>
+                                    </div>
                                     <template x-if="j.role === 'supervisor' && (j.tasks || []).length">
                                         <div class="flex items-center" style="gap:9px;margin-top:7px;max-width:320px">
                                             <span class="fz-mono" style="font-size:9.5px;color:#c8d0d3;flex:0 0 auto" x-text="taskDone(j) + '/' + j.tasks.length + ' tasks'"></span>

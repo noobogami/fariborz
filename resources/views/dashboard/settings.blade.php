@@ -31,6 +31,14 @@
                 'label' => $f['label'],
                 'help' => $f['help'] ?? '',
                 'type' => $type,
+                // Forces the dropdown control regardless of option count (see
+                // SettingsController::withModelDropdowns) — a segmented row of
+                // model names is unreadable and hides the blank option.
+                'ui' => $f['ui'] ?? '',
+                // Warning shown under the label: gateway down / empty / stale value.
+                'notice' => $f['notice'] ?? '',
+                // A saved value the gateway no longer serves, kept selectable.
+                'stale' => $f['stale'] ?? '',
                 'numeric' => in_array($f['type'], ['int', 'float'], true),
                 'options' => $f['options'] ?? [],
                 'value' => $type === 'bool' ? (bool) $val : ($secret ? '' : ($val ?? '')),
@@ -130,6 +138,11 @@
                                 <div style="min-width:0;flex:1 1 auto">
                                     <div style="font-size:13px;color:#dbe2e4;letter-spacing:-.004em" x-text="f.label"></div>
                                     <div class="fz-mono" style="font-size:10px;color:#8a9499;margin-top:4px;line-height:1.5" x-text="f.help"></div>
+                                    <template x-if="f.notice">
+                                        <div class="fz-mono flex" style="gap:6px;align-items:flex-start;margin-top:6px;font-size:10px;line-height:1.5;color:#f5c987">
+                                            <span style="flex:0 0 auto">▲</span><span x-text="f.notice"></span>
+                                        </div>
+                                    </template>
                                 </div>
 
                                 <div class="set-ctl">
@@ -178,7 +191,9 @@
                                                     style="width:100%;padding:8px 30px 8px 11px;border-radius:8px;background:#101416;font-size:11.5px;appearance:none;-webkit-appearance:none;cursor:pointer"
                                                     :style="{ border: '1px solid '+(f.edited?'rgba(242,182,97,.4)':'rgba(255,255,255,.1)'), color: f.edited?'#f7e2c2':'#e4e9ea' }">
                                                 <template x-for="o in f.options" :key="o">
-                                                    <option :value="o" :selected="String($store.settings.cur(f)) === String(o)" x-text="o==='' ? '— use default model —' : o" style="background:#101416;color:#e4e9ea"></option>
+                                                    <option :value="o" :selected="String($store.settings.cur(f)) === String(o)"
+                                                            x-text="o==='' ? '— use default model —' : (o===f.stale ? o + '  ·  not on gateway' : o)"
+                                                            style="background:#101416;color:#e4e9ea"></option>
                                                 </template>
                                             </select>
                                             <span class="fz-mono" style="position:absolute;right:11px;top:50%;transform:translateY(-50%);pointer-events:none;font-size:9px;color:#8a9499">▾</span>
@@ -276,8 +291,12 @@ document.addEventListener('alpine:init', () => {
         },
         _fieldProps(f) {
             const isBool = f.type === 'bool', isSecret = f.type === 'secret';
-            const isSeg = f.type === 'select' && f.options.length <= 3;
-            const isSelect = f.type === 'select' && f.options.length > 3;
+            // A short option list normally becomes a segmented row, but a field
+            // that asked for `ui: select` (the gateway model lists) always stays a
+            // dropdown — long names don't fit buttons, and a blank option would
+            // render as an invisible one.
+            const isSeg = f.type === 'select' && f.ui !== 'select' && f.options.length <= 3;
+            const isSelect = f.type === 'select' && !isSeg;
             const control = isBool ? 'bool' : isSecret ? 'secret' : isSeg ? 'seg' : isSelect ? 'select' : 'input';
             const edited = this.edited(f.key);
             const chip = edited ? CHIP.EDITED : f.state === 'override' ? CHIP.OVERRIDDEN : CHIP.DEFAULT;

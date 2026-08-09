@@ -9,6 +9,7 @@ use App\Domain\Research\Contracts\ResearchJobRepository;
 use App\Domain\Research\Enums\JobRole;
 use App\Domain\Research\Enums\JobStatus;
 use App\Domain\Research\Enums\TaskStatus;
+use App\Application\Research\Llm\ModelCatalog;
 use App\Http\Controllers\Controller;
 use App\Models\HumanQuestion;
 use App\Models\ResearchEvent;
@@ -20,7 +21,10 @@ use Illuminate\Support\Facades\Cache;
 
 class DashboardController extends Controller
 {
-    public function __construct(private ResearchJobRepository $jobs) {}
+    public function __construct(
+        private ResearchJobRepository $jobs,
+        private ModelCatalog $catalog,
+    ) {}
 
     /** Jobs list + new-job form. */
     public function index()
@@ -39,7 +43,7 @@ class DashboardController extends Controller
             ->whereNull('parent_job_id')
             ->latest('created_at')
             ->limit(50)
-            ->get(['id', 'slug', 'goal', 'status', 'role', 'iteration', 'tool_call_count', 'confidence', 'created_at']);
+            ->get(['id', 'slug', 'workspace_slug', 'goal', 'status', 'role', 'iteration', 'tool_call_count', 'confidence', 'created_at']);
 
         $supIds = $jobs->where('role', JobRole::Supervisor)->pluck('id');
         $tasksByJob = $supIds->isEmpty() ? collect()
@@ -53,6 +57,9 @@ class DashboardController extends Controller
             $row = [
                 'id' => $j->id,
                 'slug' => $j->slug,
+                // The sandbox dir the whole job tree shares — the list links straight
+                // to it, so a finished job's files are reachable without opening it.
+                'workspace_slug' => $j->workspace_slug,
                 'goal' => $j->goal,
                 'status' => $j->status->value,
                 'role' => $j->role->value,
@@ -229,7 +236,7 @@ class DashboardController extends Controller
      */
     private function resolveActivity(ResearchJob $job): array
     {
-        $model = config('research.llm.model');
+        $model = $this->catalog->displayModel();
         $open = HumanQuestion::where('research_job_id', $job->id)
             ->whereIn('status', ['queued', 'asked'])->count();
 

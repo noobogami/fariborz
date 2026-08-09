@@ -298,6 +298,64 @@ class SupervisorTest extends TestCase
         $this->assertSame(JobStatus::Completed, $job->status);
         $this->assertStringContainsString('Chapter', (string) $job->final_report);
         $this->assertStringContainsString('did not complete', (string) $job->final_report); // the Failed task is flagged honestly
+        // A markdown deliverable isn't a page — no preview link to promise.
+        $this->assertStringNotContainsString('Preview:', (string) $job->final_report);
+    }
+
+    public function test_the_report_points_at_the_static_preview_when_the_deliverable_is_a_page(): void
+    {
+        // The sandbox already serves every workspace statically, so an HTML
+        // artifact is viewable with no server written for it. The link is added
+        // in code — no worker prompt carries a rule about it.
+        Queue::fake();
+        $this->app->instance(LlmClient::class, new FakeLlmClient(['not-json — must never be read']));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Page', 'brief' => 'b',
+            'status' => TaskStatus::Done, 'depends_on' => [], 'result' => 'wrote it', 'outputs' => ['./index.html']]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $job->refresh();
+        // "./index.html" is what /preview/<workspace>/ resolves to on its own.
+        $this->assertStringContainsString("Preview: /sandbox/preview/{$job->workspace_slug}/\n", (string) $job->final_report);
+    }
+
+    public function test_the_report_names_the_page_when_it_is_not_a_root_index(): void
+    {
+        Queue::fake();
+        $this->app->instance(LlmClient::class, new FakeLlmClient(['not-json — must never be read']));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Page', 'brief' => 'b',
+            'status' => TaskStatus::Done, 'depends_on' => [], 'result' => 'wrote it', 'outputs' => ['site/report.html']]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $job->refresh();
+        $this->assertStringContainsString("Preview: /sandbox/preview/{$job->workspace_slug}/site/report.html",
+            (string) $job->final_report);
+    }
+
+    public function test_the_report_does_not_link_a_page_from_a_task_that_failed(): void
+    {
+        // A declared output on a Failed task may never have been written — the
+        // report must not point at a 404 and call it a deliverable.
+        Queue::fake();
+        $this->app->instance(LlmClient::class, new FakeLlmClient(['not-json — must never be read']));
+
+        $job = app(StartResearch::class)->handle('project', [], JobRole::Supervisor);
+        $job->update(['requirements' => ['restatement' => 'x']]);
+        ResearchTask::create(['research_job_id' => $job->id, 'seq' => 1, 'title' => 'Page', 'brief' => 'b',
+            'status' => TaskStatus::Failed, 'depends_on' => [], 'result' => ResearchTask::WORKER_ERROR_PREFIX.'429',
+            'outputs' => ['index.html']]);
+
+        app(ResearchOrchestrator::class)->advance($job->id);
+
+        $job->refresh();
+        $this->assertStringNotContainsString('Preview:', (string) $job->final_report);
     }
 
     public function test_completed_worker_no_longer_eagerly_injects_the_artifact_then_a_reviewer_is_spawned(): void

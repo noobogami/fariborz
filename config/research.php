@@ -105,9 +105,17 @@ return [
         // the dashboard can label the active path.
         'driver' => 'openai_compatible',
         // The DEFAULT model, used when no tier override applies. It is a GATEWAY
-        // model name (managed in Settings ▸ Tools ▸ Gateway models), e.g.
-        // "local-standard", "local-fast", "gpt-4o", "claude", … (see config/litellm).
-        'model' => env('RESEARCH_LLM_MODEL', 'local-standard'),
+        // model name — an ALIAS you create in Settings ▸ Tools ▸ Gateway models,
+        // renameable and deletable at will, so there is deliberately NO literal
+        // default here: blank means "whatever the gateway serves" and ModelCatalog
+        // picks a live one. Setting it pins a specific alias; if that alias later
+        // disappears, ModelCatalog still routes around it instead of failing every
+        // turn on a name that no longer exists.
+        'model' => env('RESEARCH_LLM_MODEL', ''),
+        // How long (seconds) to cache the gateway's model list. It is read once per
+        // planner turn; 0 disables caching. Adding/removing a model in the UI busts
+        // it immediately regardless.
+        'catalog_ttl' => env('RESEARCH_LLM_CATALOG_TTL', 30),
         'max_tokens' => env('RESEARCH_LLM_MAX_TOKENS', 4096),
         'temperature' => env('RESEARCH_LLM_TEMPERATURE', 0.2),
         // Keep at most this many transcript messages verbatim; older ones get summarized.

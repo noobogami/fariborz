@@ -27,8 +27,19 @@ class OpenAiCompatibleClient implements LlmClient
     {
         $config = config('research.llm.openai_compatible');
 
+        // ModelRouter resolves the model against the gateway's live catalogue, so a
+        // blank one here means the catalogue itself had nothing to offer — the
+        // gateway serves no models at all. Say that, rather than posting model:""
+        // and surfacing whatever the gateway makes of it.
+        $model = trim((string) config('research.llm.model', ''));
+        if ($model === '') {
+            throw new RuntimeException(
+                'No model available: the LLM gateway serves none. Add one in Settings ▸ Tools ▸ Gateway models.'
+            );
+        }
+
         $payload = [
-            'model' => config('research.llm.model'),
+            'model' => $model,
             'messages' => $this->buildMessages($system, $messages),
             'max_tokens' => (int) config('research.llm.max_tokens'),
             'temperature' => (float) config('research.llm.temperature'),

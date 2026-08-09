@@ -26,9 +26,25 @@
     .sb-main{flex:1 1 620px;min-width:0}
     .sb-side{flex:0 0 300px;display:flex;flex-direction:column;gap:14px}
     @media (max-width:1080px){ .sb-side{flex-basis:100%} }
+
+    /* Offline: the whole page body is frozen behind a blurred scrim. It lives
+       inside the content column, so the sidebar stays sharp and navigable. */
+    .sb-dim{max-height:calc(100vh - 190px);overflow:hidden}
+    .sb-veil{position:absolute;inset:-10px;z-index:5;display:flex;align-items:center;justify-content:center;
+             border-radius:16px;background:rgba(20,25,27,.55);
+             backdrop-filter:blur(7px) saturate(.55);-webkit-backdrop-filter:blur(7px) saturate(.55)}
+    .sb-veil-card{max-width:430px;margin:0 22px;padding:26px 28px;text-align:center;border-radius:15px;
+                  border:1px solid rgba(242,182,97,.3);background:linear-gradient(180deg,#23282c,#1b2021);
+                  box-shadow:0 24px 60px rgba(0,0,0,.5)}
 </style>
 
-<div x-data="sandboxPage()" x-init="start()">
+<div x-data="sandboxPage()" x-init="start()" style="position:relative">
+
+{{-- Driven by `offline`, not just the server-rendered state, so the veil also
+     appears if the container dies while the page is sitting open.
+     `inert` keeps the blurred console/inputs from being typed into or tabbed to. --}}
+<div :class="{ 'sb-dim': offline }" :aria-hidden="offline" x-effect="$el.inert = offline"
+     @class(['sb-dim' => ! $reachable])>
 
     {{-- Environment hero --}}
     @php
@@ -52,9 +68,6 @@
                 </div>
             </template>
         </div>
-        @unless ($reachable)
-            <p class="fz-mono" style="font-size:11px;color:#f5c987;margin:12px 0 0">Start it: <code>docker compose up -d sandbox</code></p>
-        @endunless
     </section>
 
     <div class="sb-cols" style="margin-top:22px">
@@ -64,7 +77,8 @@
             <div class="flex items-center" style="gap:12px;margin-bottom:13px">
                 <h2 style="margin:0;font-size:13px;font-weight:600;color:#e4e9ea">Running processes</h2>
                 <span class="fz-mono" style="font-size:10.5px;color:#8a9499" x-text="processes.length + ' live'"></span>
-                <button @click="refresh()" class="fz-mono" style="margin-left:auto;font-size:10px;padding:4px 10px;border-radius:7px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03);color:#a3adb1;cursor:pointer" x-text="loading ? '…' : '↻ refresh'"></button>
+                {{-- Fixed width + a static label: a text swap on every 5s poll would shift the header. --}}
+                <button @click="refresh(true)" :disabled="loading" class="fz-mono" style="margin-left:auto;font-size:10px;width:78px;padding:4px 0;border-radius:7px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03);color:#a3adb1;cursor:pointer" :style="{ opacity: loading ? .5 : 1 }">↻ refresh</button>
             </div>
 
             <div x-show="error" x-cloak class="fz-mono" style="margin-bottom:12px;border-radius:9px;border:1px solid rgba(242,182,97,.35);background:rgba(242,182,97,.1);padding:9px 12px;font-size:11px;color:#f5c987" x-text="error"></div>
@@ -92,7 +106,10 @@
                                 </div>
                             </div>
                         </template>
-                        <div x-show="!processes.length && !loading" style="padding:28px 15px;text-align:center;color:#8a9499;font-size:13px">No background servers running.</div>
+                        {{-- Gated on `loaded`, never on `loading`: keying it to the in-flight
+                             poll made this row (and the panel) collapse every 5 seconds. --}}
+                        <div x-show="loaded && !processes.length" x-cloak style="padding:28px 15px;text-align:center;color:#8a9499;font-size:13px">No background servers running.</div>
+                        <div x-show="!loaded" class="fz-mono" style="padding:28px 15px;text-align:center;color:#8a9499;font-size:11px">loading…</div>
                     </div>
                 </div>
             </div>
@@ -104,6 +121,9 @@
                 <div class="flex items-center" style="margin-left:auto;gap:6px">
                     <span class="fz-mono" style="font-size:10px;color:#8a9499">workspace</span>
                     <input x-model="job" @change="boot()" class="fz-mono" style="width:130px;padding:5px 9px;border-radius:7px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);color:#e4e9ea;font-size:11px" placeholder="workspace slug or 'console'">
+                    <a :href="'{{ url('/sandbox/preview') }}/' + encodeURIComponent(safeJob()) + '/'" target="_blank" rel="noopener"
+                       title="Serve this workspace's index.html in the browser — no server needed"
+                       class="fz-mono" style="font-size:9.5px;letter-spacing:.05em;padding:5px 10px;border-radius:7px;background:rgba(62,207,142,.1);border:1px solid rgba(62,207,142,.3);color:#5fdda5;text-decoration:none">▶ PREVIEW</a>
                 </div>
             </div>
 
@@ -174,7 +194,28 @@
             @endif
         </aside>
     </div>
-</div>
+</div>{{-- /sb-dim --}}
+
+    {{-- Cloaked only when the page rendered online, so an offline page paints the
+         veil immediately instead of flashing the dead UI until Alpine boots. --}}
+    <div class="sb-veil" x-show="offline" @if ($reachable) x-cloak @endif>
+        <div class="sb-veil-card">
+            <div style="width:11px;height:11px;margin:0 auto 14px;border-radius:50%;background:#f2b661;box-shadow:0 0 20px rgba(242,182,97,.55);animation:breathe 2.2s ease-in-out infinite"></div>
+            <h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-.01em;color:#f5c987">Sandbox is offline</h2>
+            <p style="margin:9px 0 0;font-size:12.5px;line-height:1.6;color:#a3adb1">
+                Nothing is answering at
+                <span class="fz-mono" style="color:#c8d0d3">{{ $status['base_url'] ?? 'the sandbox' }}</span>,
+                so the console and process list are unavailable.
+            </p>
+            <div class="fz-mono" style="margin-top:15px;padding:10px 13px;border-radius:9px;text-align:left;background:#0e1214;border:1px solid rgba(255,255,255,.08);font-size:11.5px;color:#ffd9da;overflow-x:auto;white-space:nowrap">docker compose up -d sandbox</div>
+            <div class="flex items-center justify-center" style="gap:9px;margin-top:16px">
+                <button @click="recheck()" :disabled="checking" class="fz-mono" style="font-size:11px;padding:7px 16px;border-radius:8px;border:1px solid rgba(255,217,218,.3);background:linear-gradient(145deg,#ea638c,#89023e);color:#fff;cursor:pointer"
+                        :style="{ opacity: checking ? .6 : 1 }" x-text="checking ? 'checking…' : 'Retry'"></button>
+                <span class="fz-mono" style="font-size:10.5px;color:#8a9499">auto-retrying every 5s</span>
+            </div>
+        </div>
+    </div>
+</div>{{-- /x-data --}}
 
 @push('scripts')
 <script>
@@ -188,7 +229,10 @@ function sandboxPage() {
     return {
         // ── process list ────────────────────────────────────────────────────
         processes: [],
-        loading: false,
+        loading: false,   // a manual refresh only — background polls stay invisible
+        loaded: false,    // first poll has landed; gates the empty state so it can't flicker
+        checking: false,  // an explicit "Retry" from the offline veil
+        offline: !REACHABLE,
         error: '',
         secs: 0,
         quickCmds: ['ps aux', 'df -h', 'ls -la', 'pip list', 'python --version', 'netstat -tlnp'],
@@ -222,16 +266,45 @@ function sandboxPage() {
             ];
         },
 
-        async refresh() {
-            this.loading = true;
+        async refresh(manual = false) {
+            if (manual) this.loading = true;
             try {
                 const r = await fetch('{{ route('ui.sandbox.processes') }}', { headers: { Accept: 'application/json' } });
                 const data = await r.json();
                 this.error = data.error || '';
-                const killing = new Set(this.processes.filter(p => p.killing).map(p => p.pid));
-                this.processes = (data.processes || []).map(p => ({ ...p, killing: killing.has(p.pid) }));
-            } catch (e) { this.error = 'Could not reach the sandbox service.'; }
-            finally { this.loading = false; }
+                this.offline = data.reachable === false;
+                // Patch rows in place and keep the array identity stable — replacing
+                // the whole list every 5s made unchanged rows re-render and twitch.
+                this.merge(data.processes || []);
+            } catch (e) { this.error = 'Could not reach the sandbox service.'; this.offline = true; }
+            finally {
+                this.loading = false;
+                this.loaded = true;
+                // The page rendered offline and the sandbox just came back — the
+                // server-rendered half (env, ports, toolchains) is stale, so reload.
+                if (!REACHABLE && !this.offline) location.reload();
+            }
+        },
+
+        /** "Retry" on the offline veil — same probe, with button feedback. */
+        async recheck() {
+            this.checking = true;
+            try { await this.refresh(); } finally { this.checking = false; }
+        },
+
+        /** Reconcile the polled list into the existing one, by pid. */
+        merge(incoming) {
+            const byPid = new Map(this.processes.map(p => [p.pid, p]));
+            const next = incoming.map(p => {
+                const existing = byPid.get(p.pid);
+                if (!existing) return { ...p, killing: false };
+                Object.assign(existing, p);   // keeps `killing` and the DOM node
+                return existing;
+            });
+            // Only touch the bound array when the set of rows actually changed.
+            const same = next.length === this.processes.length
+                && next.every((p, i) => p === this.processes[i]);
+            if (!same) this.processes = next;
         },
         async kill(p) {
             if (!confirm(`Kill PID ${p.pid} (port ${p.port})?`)) return;

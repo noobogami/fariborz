@@ -106,7 +106,7 @@
 
         <div data-label class="fz-mono" style="margin-top:auto;border-top:1px solid rgba(255,255,255,.06);padding-top:14px;display:flex;flex-direction:column;gap:9px;font-size:10.5px">
             <div style="display:flex;justify-content:space-between"><span style="color:#8a9499">RUNTIME</span><span style="color:#a3adb1">{{ config('research.llm.driver') }}</span></div>
-            <div style="display:flex;justify-content:space-between"><span style="color:#8a9499">MODEL</span><span style="color:#a3adb1">{{ config('research.llm.model') }}</span></div>
+            <div style="display:flex;justify-content:space-between"><span style="color:#8a9499">MODEL</span><span style="color:#a3adb1">{{ app(\App\Application\Research\Llm\ModelCatalog::class)->displayModel() }}</span></div>
             <div style="display:flex;align-items:center;gap:6px;margin-top:2px">
                 <div style="width:6px;height:6px;border-radius:50%;background:#3ecf8e;animation:fzBreathe 2.4s ease-in-out infinite"></div>
                 <span style="color:#96a0a5">agent online</span>

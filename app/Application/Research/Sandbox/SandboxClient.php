@@ -101,6 +101,32 @@ class SandboxClient
         return $this->get('/logs', ['job' => $job]);
     }
 
+    /**
+     * Raw bytes of one file in a job's workspace, with the content type the
+     * sandbox inferred — enough to render a static page in a browser. Unlike
+     * read(), this doesn't decode to JSON or truncate, so images and fonts
+     * survive. A directory resolves to its index.html.
+     *
+     * Returns the sandbox's own status rather than throwing: a missing file is
+     * an ordinary 404 to hand back to the browser, not a client failure.
+     *
+     * @return array{status:int,content_type:string,body:string}
+     */
+    public function preview(string $job, string $path = ''): array
+    {
+        $segments = array_map('rawurlencode', array_filter(explode('/', $path), fn ($s) => $s !== ''));
+
+        $res = $this->http->timeout((int) config('research.sandbox.request_timeout', 300))
+            ->withOptions(['allow_redirects' => false])
+            ->get($this->baseUrl().'/preview/'.rawurlencode($job).'/'.implode('/', $segments));
+
+        return [
+            'status' => $res->status(),
+            'content_type' => $res->header('Content-Type') ?: 'application/octet-stream',
+            'body' => $res->body(),
+        ];
+    }
+
     private function post(string $path, array $body): array
     {
         $res = $this->http->timeout((int) config('research.sandbox.request_timeout', 300))

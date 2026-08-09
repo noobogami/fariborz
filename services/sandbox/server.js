@@ -13,6 +13,7 @@
  *   POST /write  { job, path, content }        -> { ok, path, bytes }
  *   GET  /read   ?job=&path=                    -> { path, content }
  *   GET  /list   ?job=&path=                    -> { entries }
+ *   GET  /preview/<job>/<path>                  -> the file itself (static view of a workspace)
  *   GET  /logs   ?job=                          -> { logs }   (recent command history)
  */
 
@@ -251,6 +252,40 @@ app.get('/read', async (req, res) => {
     res.status(404).json({ error: e.message });
   }
 });
+
+// Static file server for a job's workspace — the "no backend needed" preview.
+// Most jobs produce plain files (index.html + css + images); making those
+// viewable used to mean the agent starting its OWN server on a published port,
+// which is a whole task's worth of work for a static page (and burns one of the
+// ten ports). This serves them straight off disk instead: a directory resolves
+// to its index.html, so /preview/<job>/ renders the page and its RELATIVE assets
+// resolve against the same prefix. Read-only, and jailed by resolveIn.
+app.get('/preview/:job/*', async (req, res) => {
+  let full;
+  try {
+    ({ full } = resolveIn(req.params.job, req.params[0] || '.'));
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  try {
+    let target = full;
+    if ((await fs.stat(target)).isDirectory()) {
+      target = path.join(target, 'index.html');
+      await fs.access(target);
+    }
+    // sendFile sets Content-Type from the extension and handles range requests.
+    res.sendFile(target, { dotfiles: 'deny' });
+  } catch {
+    res.status(404).json({ error: 'not found in this workspace' });
+  }
+});
+
+// Registered AFTER the wildcard above, not before: Express's non-strict routing
+// would let this pattern also swallow "/preview/<job>/" and redirect it to
+// itself forever. Reaching here means there was no trailing slash at all — which
+// would resolve a page's relative assets one directory too high.
+app.get('/preview/:job', (req, res) => res.redirect(302, `/preview/${encodeURIComponent(req.params.job)}/`));
 
 app.get('/list', async (req, res) => {
   try {

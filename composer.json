@@ -9,7 +9,8 @@
         "guzzlehttp/guzzle": "^7.8",
         "justinrainbow/json-schema": "^6.0",
         "laravel/framework": "^11.0",
-        "laravel/tinker": "^3.0"
+        "laravel/tinker": "^3.0",
+        "predis/predis": "^3.5"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

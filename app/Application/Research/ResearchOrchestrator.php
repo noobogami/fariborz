@@ -8,6 +8,7 @@ use App\Application\Research\Llm\ModelAvailability;
 use App\Application\Research\Planner\FailureDiagnosis;
 use App\Application\Research\Planner\GoalComprehension;
 use App\Application\Research\Planner\InvalidDecisionException;
+use App\Application\Research\Planner\ModelRouter;
 use App\Application\Research\Tools\ArtifactChecks;
 use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Research\Tools\ToolRunner;
@@ -58,6 +59,7 @@ class ResearchOrchestrator
         private StartResearch $start,
         private GoalComprehension $comprehension,
         private ModelAvailability $availability,
+        private ModelRouter $router,
         private FailureDiagnosis $diagnosis,
         private ArtifactChecks $artifactChecks,
     ) {}
@@ -340,6 +342,12 @@ class ResearchOrchestrator
         $doneCount = 0;
 
         $lines = ["# {$job->goal}", ''];
+
+        if ($preview = $this->previewPath($job, $tasks)) {
+            $lines[] = "Preview: {$preview}";
+            $lines[] = '';
+        }
+
         foreach ($tasks as $t) {
             $status = $t->status->value;
             if ($t->status === TaskStatus::Done) {
@@ -369,6 +377,44 @@ class ResearchOrchestrator
         }
 
         return [trim(implode("\n", $lines)), $confidence];
+    }
+
+    /**
+     * Where a human can LOOK at the result, when the deliverable is a page.
+     *
+     * The sandbox serves every workspace statically, so an HTML artifact is
+     * already viewable — this just says so. Done in code, on purpose: the URL is
+     * for the reader, not the agent, so no worker prompt has to carry a rule
+     * about it and no model has to decide anything.
+     *
+     * Emitted only when a task actually DECLARED an .html output, so the report
+     * never promises a page that was never written. A relative path rather than
+     * a full URL: the report is read from the dashboard, `research:trace` and
+     * Docker alike, where APP_URL's host and port may not be the one in front of
+     * whoever is reading.
+     *
+     * @param  Collection<int, ResearchTask>  $tasks
+     */
+    private function previewPath(ResearchJob $job, Collection $tasks): ?string
+    {
+        $pages = $tasks
+            ->filter(fn (ResearchTask $t) => $t->status === TaskStatus::Done)
+            ->flatMap(fn (ResearchTask $t) => array_values(array_filter((array) ($t->outputs ?? []))))
+            ->map(fn ($p) => ltrim(str_replace('\\', '/', (string) $p), './'))
+            ->filter(fn (string $p) => str_ends_with(strtolower($p), '.html'))
+            ->values();
+
+        if ($pages->isEmpty()) {
+            return null;
+        }
+
+        $workspace = $this->workspaceIdFor($job);
+
+        // A root index.html is what /preview/<workspace>/ resolves to by itself;
+        // anything else has to be named or the link would 404.
+        return $pages->contains('index.html')
+            ? "/sandbox/preview/{$workspace}/"
+            : "/sandbox/preview/{$workspace}/{$pages->first()}";
     }
 
     private function finalizeByGuardrail(ResearchJob $job, GuardrailVerdict $stop): void
@@ -782,12 +828,15 @@ class ResearchOrchestrator
         return ['tier' => $newTier, 'model' => $replacement, 'from' => $model];
     }
 
-    /** Resolve a tier to its concrete model, falling back to the global model when blank. */
+    /**
+     * Resolve a tier to its concrete model. Delegated to ModelRouter so this
+     * agrees with what a spawned agent will actually run on — including the
+     * gateway-catalogue resolution that keeps a renamed model from being handed
+     * out here as a live candidate.
+     */
     private function resolveTierModel(string $tier): string
     {
-        $m = trim((string) config("research.llm.tiers.$tier.model", ''));
-
-        return $m !== '' ? $m : trim((string) config('research.llm.model', ''));
+        return $this->router->modelForTier($tier);
     }
 
     /**

@@ -5,7 +5,7 @@
     $roleExtras = $initial['role_extras'] ?? ['role' => 'solo', 'max_iterations' => (int) config('research.limits.max_iterations', 40)];
     $role = $roleExtras['role'] ?? 'solo';
     $maxIter = (int) ($roleExtras['max_iterations'] ?? config('research.limits.max_iterations', 40));
-    $llmModel = config('research.llm.model');
+    $llmModel = app(\App\Application\Research\Llm\ModelCatalog::class)->displayModel();
     $llmTemp = config('research.llm.temperature');
     $roleLabel = strtoupper($role);
     $roleBadge = [
@@ -30,6 +30,10 @@
                 @if (! empty($workspaceSlug))
                     <a href="{{ route('sandbox') }}?job={{ $workspaceSlug }}" title="Open this job's sandbox workspace"
                        style="font-size:8.5px;letter-spacing:.05em;padding:2px 7px;border-radius:5px;background:rgba(234,99,140,.1);border:1px solid rgba(234,99,140,.3);color:#ffb3c4;text-decoration:none">⌗ {{ $workspaceSlug }}</a>
+                    {{-- slash appended OUTSIDE url(): the generator trims a trailing one, costing a redirect hop --}}
+                    <a href="{{ url('/sandbox/preview/'.$workspaceSlug) }}/" target="_blank" rel="noopener"
+                       title="View this workspace's index.html in the browser"
+                       style="font-size:8.5px;letter-spacing:.05em;padding:2px 7px;border-radius:5px;background:rgba(62,207,142,.1);border:1px solid rgba(62,207,142,.3);color:#5fdda5;text-decoration:none">▶ PREVIEW</a>
                 @endif
             </div>
             <h1 style="margin:0;font-size:19px;line-height:1.32;font-weight:600;letter-spacing:-.015em;color:#f2f5f6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:92ch">{{ $initial['job']['goal'] }}</h1>

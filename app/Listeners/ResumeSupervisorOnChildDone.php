@@ -3,6 +3,7 @@
 namespace App\Listeners;
 
 use App\Application\Research\Llm\ModelAvailability;
+use App\Application\Research\Planner\ModelRouter;
 use App\Application\Research\Sandbox\SandboxClient;
 use App\Application\Research\Sandbox\SandboxException;
 use App\Domain\Research\Contracts\MemoryRepository;
@@ -41,6 +42,7 @@ class ResumeSupervisorOnChildDone
         private MemoryRepository $memory,
         private SandboxClient $sandbox,
         private ModelAvailability $availability,
+        private ModelRouter $router,
     ) {}
 
     public function handleCompleted(object $event): void
@@ -270,12 +272,9 @@ class ResumeSupervisorOnChildDone
         return $blocks ? "THE DELIVERABLE FILE(S) IN THE WORKSPACE:\n".implode("\n\n", $blocks)."\n\n" : '';
     }
 
-    /** The model a job ran on (its tier's model, or the global model). */
+    /** The model a job ran on — resolved exactly as ModelRouter pinned it that turn. */
     private function workerModel(ResearchJob $worker): string
     {
-        $tier = $worker->config['tier'] ?? config('research.llm.default_tier', 'standard');
-        $model = trim((string) config("research.llm.tiers.$tier.model", ''));
-
-        return $model !== '' ? $model : trim((string) config('research.llm.model', ''));
+        return $this->router->modelFor($worker);
     }
 }

@@ -4,8 +4,8 @@ namespace App\Http\Controllers\Dashboard;
 
 use App\Application\Research\Browser\BrowserClient;
 use App\Application\Research\Browser\BrowserServiceException;
-use App\Application\Research\Llm\GatewayManager;
 use App\Application\Research\Llm\LiteLLMAdminClient;
+use App\Application\Research\Llm\ModelCatalog;
 use App\Application\Research\Sandbox\SandboxClient;
 use App\Http\Controllers\Controller;
 use App\Models\CustomTool;
@@ -27,7 +27,7 @@ class ToolsController extends Controller
     public function __construct(
         private BrowserClient $browser,
         private SandboxClient $sandbox,
-        private GatewayManager $gateway,
+        private ModelCatalog $catalog,
         private LiteLLMAdminClient $litellm,
     ) {}
 
@@ -53,7 +53,7 @@ class ToolsController extends Controller
         return response()->json([
             'browser' => $this->browser->status(),
             'sandbox' => $this->sandbox->status(),
-            'gateway' => $this->gateway->status(),
+            'gateway' => $this->catalog->gatewayStatus(),
             'gatewayModels' => $this->litellm->list(),
         ]);
     }
@@ -89,7 +89,10 @@ class ToolsController extends Controller
             'think' => $request->boolean('think'),
         ]);
 
-        return response()->json(['result' => $this->litellm->create($data['name'], $params), 'models' => $this->litellm->list()]);
+        $result = $this->litellm->create($data['name'], $params);
+        $this->catalog->forget();   // the catalogue just changed — don't serve a stale one
+
+        return response()->json(['result' => $result, 'models' => $this->litellm->list()]);
     }
 
     /** Run LiteLLM's /health on demand (real calls to every model — slow). */
@@ -107,6 +110,7 @@ class ToolsController extends Controller
         $result = $id
             ? $this->litellm->delete($id)
             : ['ok' => false, 'message' => 'not a DB-backed model (nothing to delete)'];
+        $this->catalog->forget();
 
         return response()->json(['name' => $name, 'result' => $result, 'models' => $this->litellm->list()]);
     }

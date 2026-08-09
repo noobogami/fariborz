@@ -16,6 +16,11 @@ Route::get('/humans', [HumanController::class, 'index'])->name('humans');
 // straight to the Tools section anchor.
 Route::get('/tools', fn () => redirect()->to(route('settings').'#tools'))->name('tools');
 Route::get('/sandbox', [SandboxController::class, 'index'])->name('sandbox');
+// Static view of a workspace: /sandbox/preview/<workspace-slug>/ renders its
+// index.html (and relative assets) with no server for the agent to write.
+Route::get('/sandbox/preview/{job}/{path?}', [SandboxController::class, 'preview'])
+    ->where(['job' => '[A-Za-z0-9._-]+', 'path' => '.*'])
+    ->name('sandbox.preview');
 Route::post('/sandbox/kill', [SandboxController::class, 'kill'])->name('sandbox.kill');
 Route::post('/sandbox/exec', [SandboxController::class, 'exec'])->name('sandbox.exec');
 Route::get('/settings', [SettingsController::class, 'index'])->name('settings');

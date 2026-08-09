@@ -84,9 +84,20 @@
 
                         <div class="fz-mono flex items-center" style="gap:8px;font-size:10px;margin-bottom:11px">
                             <span style="color:#8a9499" x-text="(gateway.model_count || 0) + ' models'"></span>
-                            <span x-show="gateway.is_active_driver" style="margin-left:auto;color:#5fdda5" x-text="'active · ' + (gateway.active_model || '')"></span>
+                            <span x-show="gateway.is_active_driver" style="margin-left:auto" :style="{ color: modelDrift ? '#f2b661' : '#5fdda5' }"
+                                  x-text="'active · ' + (gateway.active_model || 'none')"></span>
                             <span x-show="!gateway.is_active_driver" style="margin-left:auto;color:#f2b661">driver: <span x-text="gateway.active_driver"></span></span>
                         </div>
+
+                        {{-- The saved model name no longer exists on the gateway (renamed or
+                             removed). Jobs keep running — the catalogue routes them to a live
+                             model — but the setting is lying, so say so and where to fix it. --}}
+                        <template x-if="modelDrift">
+                            <div class="fz-mono" style="font-size:10px;line-height:1.55;color:#f5c987;border:1px solid rgba(242,182,97,.3);background:rgba(242,182,97,.07);border-radius:9px;padding:8px 10px;margin-bottom:11px">
+                                <span x-text="'“' + gateway.configured_model + '” is not on this gateway — running on “' + gateway.active_model + '”.'"></span>
+                                <a href="#llm" style="color:#f2b661">Pick a real one ↑</a>
+                            </div>
+                        </template>
 
                         <template x-if="gateway.reachable && (gateway.models || []).length">
                             <div class="flex flex-wrap" style="gap:6px">
@@ -96,7 +107,9 @@
                                 </template>
                             </div>
                         </template>
-                        <div x-show="gateway.reachable && !(gateway.models || []).length" class="fz-mono" style="font-size:11px;color:#8a9499">No models configured in the gateway.</div>
+                        <div x-show="gateway.reachable && !(gateway.models || []).length" class="fz-mono" style="font-size:11px;line-height:1.55;color:#f5c987">
+                            No models on this gateway yet — <b>nothing can run</b> until you add one below.
+                        </div>
                         <div x-show="!gateway.reachable" class="fz-mono" style="font-size:11px;color:#ff9b9b">Unreachable — is the <span style="color:#c8d0d3">litellm</span> service up?</div>
                     </div>
 

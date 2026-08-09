@@ -46,8 +46,10 @@ x-app-env: &app-env
   # (mac) so the host daemon accepts connections from the container network.
   # To run Ollama IN Docker instead: `docker compose --profile ollama-docker up`
   # and change this back to http://ollama:11434.
-  # A default GATEWAY model name (managed in Tools ▸ Gateway models).
-  RESEARCH_LLM_MODEL: ${RESEARCH_LLM_MODEL:-local-standard}
+  # Optional: pin a GATEWAY model name (managed in Tools ▸ Gateway models). Leave
+  # blank and Fariborz uses whatever the gateway actually serves — no literal here,
+  # because these names are aliases you can rename or delete at any time.
+  RESEARCH_LLM_MODEL: ${RESEARCH_LLM_MODEL:-}
   # NOTE: the app no longer talks to Ollama directly — Ollama's connection is the
   # gateway's concern (OLLAMA_BASE_URL is set on the litellm service, not here).
   # LiteLLM gateway — the ONLY path to models (local Ollama AND cloud) behind one
