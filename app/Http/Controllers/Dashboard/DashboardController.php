@@ -135,10 +135,10 @@ class DashboardController extends Controller
     /** Stop a job AND every sub-agent under it (workers, reviewers, sub-projects). */
     public function cancel(string $id, CancelResearch $cancel)
     {
-        $subAgents = max(0, $cancel->handle($this->jobs->find($id)) - 1);
+        $stopped = $cancel->handle($this->jobs->find($id));
 
-        return back()->with('status', $subAgents > 0
-            ? 'Job cancelled, along with '.$subAgents.' sub-agent'.($subAgents === 1 ? '' : 's').'.'
+        return back()->with('status', $stopped > 1
+            ? "Job cancelled — {$stopped} jobs stopped (it and its sub-agents)."
             : 'Job cancelled.');
     }
 

@@ -224,6 +224,63 @@ class SupervisorTest extends TestCase
         $this->assertFalse($res->success);
     }
 
+    public function test_a_plan_that_declares_no_ordering_at_all_is_chained_sequentially(): void
+    {
+        Queue::fake();
+        $job = $this->supervisor();
+        // The weak-model failure mode: every task explicitly "independent", so the
+        // chapters would all start before the outline exists.
+        app(ToolRegistry::class)->get('plan_tasks')->execute(new ToolArguments([
+            'tasks' => [
+                ['title' => 'Outline', 'brief' => 'the plan', 'depends_on' => [], 'outputs' => ['/app/outline.md']],
+                ['title' => 'Ch1', 'brief' => 'write it', 'depends_on' => [], 'outputs' => ['/app/ch1.md']],
+                ['title' => 'Ch2', 'brief' => 'write it', 'depends_on' => [], 'outputs' => ['/app/ch2.md']],
+            ],
+        ]), $this->ctx($job));
+
+        $tasks = ResearchTask::where('research_job_id', $job->id)->orderBy('seq')->get();
+        $this->assertSame([], $tasks[0]->depends_on);
+        $this->assertSame([1], $tasks[1]->depends_on, 'no ordering declared anywhere → "independent" is treated as unstated');
+        $this->assertSame([2], $tasks[2]->depends_on);
+    }
+
+    public function test_declared_inputs_wire_a_task_to_whoever_produces_the_file(): void
+    {
+        Queue::fake();
+        $job = $this->supervisor();
+        app(ToolRegistry::class)->get('plan_tasks')->execute(new ToolArguments([
+            'tasks' => [
+                ['title' => 'UI shell', 'brief' => 'the page', 'depends_on' => [], 'outputs' => ['/app/index.html']],
+                ['title' => 'Outline', 'brief' => 'the plan', 'depends_on' => [], 'outputs' => ['/app/outline.md']],
+                ['title' => 'Ch1', 'brief' => 'write it', 'depends_on' => [], 'inputs' => ['outline.md'], 'outputs' => ['/app/ch1.md']],
+                ['title' => 'Ch2', 'brief' => 'write it', 'depends_on' => [], 'inputs' => ['/app/outline.md', '/app/ch1.md'], 'outputs' => ['/app/ch2.md']],
+            ],
+        ]), $this->ctx($job));
+
+        $tasks = ResearchTask::where('research_job_id', $job->id)->orderBy('seq')->get();
+        $this->assertSame([], $tasks[0]->depends_on, 'a task that reads nothing stays independent and runs in parallel');
+        $this->assertSame([], $tasks[1]->depends_on);
+        $this->assertSame([2], $tasks[2]->depends_on, 'reading outline.md orders the chapter after the outline task');
+        $this->assertSame([2, 3], $tasks[3]->depends_on);
+    }
+
+    public function test_file_paths_named_in_a_brief_also_create_dependencies(): void
+    {
+        Queue::fake();
+        $job = $this->supervisor();
+        app(ToolRegistry::class)->get('plan_tasks')->execute(new ToolArguments([
+            'tasks' => [
+                ['title' => 'Ch1', 'brief' => 'write it', 'depends_on' => [], 'inputs' => [], 'outputs' => ['/app/chapter1.md']],
+                ['title' => 'Ch2', 'brief' => 'write it', 'depends_on' => [1], 'outputs' => ['/app/chapter2.md']],
+                ['title' => 'Assemble', 'brief' => 'Verify /app/chapter1.md and chapter2.md, then build the book.', 'depends_on' => [], 'outputs' => ['/app/book.html']],
+            ],
+        ]), $this->ctx($job));
+
+        $tasks = ResearchTask::where('research_job_id', $job->id)->orderBy('seq')->get();
+        $this->assertSame([1, 2], $tasks[2]->depends_on, 'an assemble task waits for every part it names');
+        $this->assertSame([], $tasks[0]->depends_on, 'a brief naming only its OWN output creates no self-dependency');
+    }
+
     public function test_dependent_task_delegates_once_its_dependency_is_done(): void
     {
         Queue::fake();

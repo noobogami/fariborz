@@ -23,15 +23,19 @@ class PlanTasksTool implements ControlTool
     public function description(): string
     {
         return 'Break the GOAL into a list of concrete, doable tasks. Each needs a title, a '
-            .'"brief" (what to do + what "done" looks like), "depends_on": the task numbers '
-            .'that must be FINISHED & VERIFIED before it can start, and "outputs": the file '
-            .'path(s) the task WRITES into the shared workspace. Use deps to model order — '
-            .'e.g. chapter 2 depends_on [1]. Leave depends_on EMPTY [] for independent tasks '
-            .'that can run in parallel (e.g. a web server that does not need the chapters). If '
-            .'you omit depends_on it defaults to the previous task. HONOR THE ORDERING the user '
-            .'demanded: if they said deploy the UI first, that task must run early (empty deps), '
-            .'not last. Declare "outputs" so a later task knows exactly which files to read. '
-            .'Call again to append tasks.';
+            .'"brief" (what to do + what "done" looks like), "outputs": the file path(s) the '
+            .'task WRITES into the shared workspace, "inputs": the file path(s) it must READ '
+            .'(anything an earlier task produces that this task builds on, continues from, or '
+            .'must stay consistent with — e.g. the outline for every chapter), and '
+            .'"depends_on": the task numbers that must be FINISHED & VERIFIED before it can '
+            .'start (e.g. chapter 2 depends_on [1]). Dependencies are also derived from '
+            .'"inputs", so a task that reads another task\'s file is ordered after it '
+            .'automatically. Leave depends_on EMPTY [] and inputs EMPTY [] only for a truly '
+            .'independent task that needs NOTHING from any other task (e.g. a web UI shell that '
+            .'does not need the chapters) — those run in parallel. If you omit depends_on it '
+            .'defaults to the previous task. HONOR THE ORDERING the user demanded: if they said '
+            .'deploy the UI first, that task must run early (empty deps), not last. Call again '
+            .'to append tasks.';
     }
 
     public function schema(): array
@@ -57,6 +61,11 @@ class PlanTasksTool implements ControlTool
                                 'items' => ['type' => 'string'],
                                 'description' => 'File path(s) this task writes into the shared workspace (e.g. ["notes.md"]). A dependent task is told to read these.',
                             ],
+                            'inputs' => [
+                                'type' => 'array',
+                                'items' => ['type' => 'string'],
+                                'description' => 'File path(s) this task must READ — anything an earlier task writes that this one builds on or must stay consistent with (e.g. ["outline.md"] for every chapter). The task is automatically ordered AFTER whichever task produces each file.',
+                            ],
                             'tier' => [
                                 'type' => 'string',
                                 'description' => 'How hard THIS task is, which picks the model that runs it. One of: '
@@ -77,25 +86,68 @@ class PlanTasksTool implements ControlTool
     public function execute(ToolArguments $args, ResearchContext $ctx): ToolResult
     {
         $jobId = $ctx->jobId();
-        $seq = (int) ResearchTask::where('research_job_id', $jobId)->max('seq');
+        $existing = ResearchTask::where('research_job_id', $jobId)->orderBy('seq')->get();
+        $seq = (int) $existing->max('seq');
+
+        $rows = array_values(array_filter($args->array('tasks'), fn ($t) => is_array($t)
+            && trim((string) ($t['title'] ?? '')) !== ''
+            && trim((string) ($t['brief'] ?? '')) !== ''));
+
+        // Did the model express ANY ordering at all — here or in an earlier batch?
+        // A plan where nothing depends on anything is the weak-model failure mode
+        // (every chapter starting before the outline exists), not a real finding,
+        // so when there is no signal whatsoever we fall back to a sequential chain.
+        $declaresOrder = $existing->contains(fn (ResearchTask $t) => ! empty($t->depends_on))
+            || collect($rows)->contains(fn ($t) => ! empty($t['depends_on']) || ! empty($t['inputs']));
+
+        // basename => the seq that WRITES it, so "task X reads foo.md" becomes a
+        // real edge to whoever produces foo.md.
+        $producers = [];
+        foreach ($existing as $t) {
+            foreach ((array) ($t->outputs ?? []) as $p) {
+                $producers[$this->fileKey($p)] = (int) $t->seq;
+            }
+        }
+        $nextSeq = $seq;
+        foreach ($rows as $t) {
+            $nextSeq++;
+            foreach ((array) ($t['outputs'] ?? []) as $p) {
+                $producers[$this->fileKey($p)] ??= $nextSeq;
+            }
+        }
 
         $added = [];
-        foreach ($args->array('tasks') as $t) {
-            $title = trim((string) ($t['title'] ?? ''));
-            $brief = trim((string) ($t['brief'] ?? ''));
-            if ($title === '' || $brief === '') {
-                continue;
-            }
+        foreach ($rows as $t) {
+            $title = trim((string) $t['title']);
+            $brief = trim((string) $t['brief']);
             $prev = $seq;
             $seq++;
 
             // Explicit deps win; otherwise default to the previous task (so a plan
-            // with no deps is safely sequential). Only keep deps that reference a
-            // real earlier task.
+            // with no deps is safely sequential).
             $deps = array_key_exists('depends_on', $t)
-                ? array_values(array_unique(array_map('intval', (array) $t['depends_on'])))
+                ? array_map('intval', (array) $t['depends_on'])
                 : ($prev >= 1 ? [$prev] : []);
-            $deps = array_values(array_filter($deps, fn ($d) => $d >= 1 && $d < $seq));
+
+            // Wire producer → consumer from the files this task reads. `inputs` is
+            // the declared version; file paths named in the brief catch the rest
+            // ("verify /app/chapter1.md through chapter5.md"). Both only ever point
+            // BACKWARD, so the graph stays a DAG.
+            foreach ($this->referencedFiles($t, $brief) as $key) {
+                $producer = $producers[$key] ?? null;
+                if ($producer !== null && $producer < $seq) {
+                    $deps[] = $producer;
+                }
+            }
+
+            // No ordering anywhere in the plan → treat "independent" as unstated.
+            if (empty($deps) && ! $declaresOrder && $prev >= 1) {
+                $deps[] = $prev;
+            }
+
+            // Only keep deps that reference a real earlier task.
+            $deps = array_values(array_unique(array_filter($deps, fn ($d) => $d >= 1 && $d < $seq)));
+            sort($deps);
 
             $outputs = array_values(array_filter(
                 array_map(fn ($p) => trim((string) $p), (array) ($t['outputs'] ?? [])),
@@ -129,6 +181,32 @@ class PlanTasksTool implements ControlTool
             .'Your job now is to review each finished task and finish when all are Done.',
             ['added' => $added]
         );
+    }
+
+    /**
+     * The files a task reads: its declared "inputs" plus any file path written out
+     * in the brief. Returned as comparison keys so "/app/outline.md", "outline.md"
+     * and "./Outline.MD" all match the task that wrote it.
+     *
+     * @param  array<string, mixed>  $t
+     * @return list<string>
+     */
+    private function referencedFiles(array $t, string $brief): array
+    {
+        $paths = array_map(fn ($p) => (string) $p, (array) ($t['inputs'] ?? []));
+
+        preg_match_all('~[\w./\\\\-]+\.[A-Za-z0-9]{1,6}\b~', $brief, $m);
+        $paths = array_merge($paths, $m[0]);
+
+        $keys = array_filter(array_map(fn ($p) => $this->fileKey($p), $paths), fn ($k) => $k !== '');
+
+        return array_values(array_unique($keys));
+    }
+
+    /** A path's comparison key: its lowercased basename. */
+    private function fileKey(string $path): string
+    {
+        return mb_strtolower(trim(basename(str_replace('\\', '/', trim($path))), " \t\n\r\0\x0B.,;:\"')"));
     }
 
     /** @return array<string, array{model?:string, hint?:string}> */

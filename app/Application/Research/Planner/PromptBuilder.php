@@ -92,7 +92,12 @@ class PromptBuilder
         1. plan_tasks — decompose the goal into concrete, right-sized tasks (see limits above).
            Each brief states what to do, the exact file path(s) to write, and what "done" looks
            like. Set depends_on: task numbers that must be FINISHED & VERIFIED first (chapter 2
-           depends_on [1]). Give INDEPENDENT tasks empty depends_on [] so they run in parallel.
+           depends_on [1]), and inputs: the file path(s) the task must READ. ORDER IS NOT
+           OPTIONAL — anything that builds on, continues, or must stay consistent with earlier
+           work DEPENDS on it: every chapter depends on the outline/plan task (a chapter cannot
+           be written before the outline exists), each chapter on the one before it, and an
+           assemble/verify task on every part it collects. Only a task that needs NOTHING from
+           any other task gets empty depends_on [] (e.g. a UI shell) — those run in parallel.
            For a goal that must be SERVED/DEPLOYED, include explicit final tasks: "assemble all
            files" then "start the server on a published port and verify it responds". Call
            plan_tasks once up front; call again only to add or fix tasks.
