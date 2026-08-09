@@ -2,14 +2,15 @@
 
 namespace App\Http\Controllers\Dashboard;
 
+use App\Application\Research\CancelResearch;
 use App\Application\Research\ContinueResearch;
+use App\Application\Research\Llm\ModelCatalog;
 use App\Application\Research\StartResearch;
 use App\Application\Research\Tracing\ResearchTraceReader;
 use App\Domain\Research\Contracts\ResearchJobRepository;
 use App\Domain\Research\Enums\JobRole;
 use App\Domain\Research\Enums\JobStatus;
 use App\Domain\Research\Enums\TaskStatus;
-use App\Application\Research\Llm\ModelCatalog;
 use App\Http\Controllers\Controller;
 use App\Models\HumanQuestion;
 use App\Models\ResearchEvent;
@@ -131,11 +132,14 @@ class DashboardController extends Controller
             ->with('status', $role === JobRole::Supervisor ? 'Supervised project started.' : 'Research job started.');
     }
 
-    public function cancel(string $id)
+    /** Stop a job AND every sub-agent under it (workers, reviewers, sub-projects). */
+    public function cancel(string $id, CancelResearch $cancel)
     {
-        $this->jobs->markCancelled($this->jobs->find($id));
+        $subAgents = max(0, $cancel->handle($this->jobs->find($id)) - 1);
 
-        return back()->with('status', 'Job cancelled.');
+        return back()->with('status', $subAgents > 0
+            ? 'Job cancelled, along with '.$subAgents.' sub-agent'.($subAgents === 1 ? '' : 's').'.'
+            : 'Job cancelled.');
     }
 
     /** One-click retry of a finished/failed job (no new guidance needed). */

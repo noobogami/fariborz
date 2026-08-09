@@ -305,6 +305,14 @@ function toolsPanel() {
             } catch (e) {}
         },
 
+        // The saved default model is not one the gateway serves, so jobs are
+        // running on a stand-in. Only meaningful once we've actually READ the
+        // catalogue — an unreachable gateway proves nothing.
+        get modelDrift() {
+            const g = this.gateway || {};
+            return !!(g.reachable && g.configured_model && g.active_model && g.configured_model !== g.active_model);
+        },
+
         // Model chip health dot: grey (unknown) → green (up) / red (down); it blinks
         // (via the chip's animation binding) while a health check is in flight.
         dotColor(name) {

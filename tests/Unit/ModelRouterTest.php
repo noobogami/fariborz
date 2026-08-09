@@ -10,6 +10,9 @@ use Tests\TestCase;
 
 class ModelRouterTest extends TestCase
 {
+    /** Model names the fake gateway serves; null = catalogue unreadable. */
+    private ?array $served = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -28,16 +31,16 @@ class ModelRouterTest extends TestCase
         // Default: the gateway is unreachable, so resolution fails open and the
         // configured names are used verbatim — the pre-catalogue behaviour.
         Http::preventStrayRequests();
-        Http::fake(['*' => Http::response('down', 500)]);
+        Http::fake(fn () => $this->served === null
+            ? Http::response('down', 500)
+            : Http::response(['data' => array_map(fn ($n) => ['id' => $n], $this->served)]));
     }
 
     /** Make the gateway serve exactly these model names. */
     private function gatewayServes(string ...$names): void
     {
+        $this->served = $names;
         Cache::flush();
-        Http::fake(['*/models' => Http::response([
-            'data' => array_map(fn ($n) => ['id' => $n], $names),
-        ])]);
     }
 
     private function router(): ModelRouter

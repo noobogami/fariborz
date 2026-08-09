@@ -57,6 +57,7 @@ class ResearchOrchestrator
         private HumanAvailabilityService $humans,
         private TraceRecorder $trace,
         private StartResearch $start,
+        private CancelResearch $cancellation,
         private GoalComprehension $comprehension,
         private ModelAvailability $availability,
         private ModelRouter $router,
@@ -916,10 +917,15 @@ class ResearchOrchestrator
         event(new ResearchCompleted($job->id, partial: true));
     }
 
+    /**
+     * The preflight guardrail says this job is cancelled (either directly, or
+     * because an ancestor was). Route it through CancelResearch so the stop
+     * always propagates DOWN the tree — an iteration in flight when the operator
+     * hit stop may have spawned sub-agents after the original cascade ran.
+     */
     private function cancel(ResearchJob $job): void
     {
-        $this->jobs->markCancelled($job);
-        $this->trace->record($job, EventType::Cancelled, 'Job cancelled by supervisor.');
+        $this->cancellation->handle($job, 'Job cancelled by supervisor.');
     }
 
     private function fail(ResearchJob $job, string $reason): void

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Application\Research\Llm\ModelAvailability;
+use App\Application\Research\Llm\ModelCatalog;
 use App\Application\Research\ResearchOrchestrator;
 use App\Application\Research\Sandbox\SandboxClient;
 use App\Application\Research\StartResearch;
@@ -31,6 +32,21 @@ use Tests\TestCase;
 class SupervisorTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Tier→model resolution now goes through the gateway's catalogue, so make
+        // the fake gateway serve exactly the names these tests configure: they are
+        // about availability routing, not about stale model names. Registered first
+        // and scoped to the catalogue URL, so a test's own stubs still win for
+        // /read, /health, etc.
+        config(['research.llm.catalog_ttl' => 0]);
+        Http::fake(['*/v1/models' => fn () => Http::response([
+            'data' => array_map(fn ($n) => ['id' => $n], app(ModelCatalog::class)->configured()),
+        ])]);
+    }
 
     private function supervisor(string $goal = 'Build a big thing'): ResearchJob
     {

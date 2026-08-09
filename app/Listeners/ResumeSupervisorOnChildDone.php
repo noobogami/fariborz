@@ -8,6 +8,7 @@ use App\Application\Research\Sandbox\SandboxClient;
 use App\Application\Research\Sandbox\SandboxException;
 use App\Domain\Research\Contracts\MemoryRepository;
 use App\Domain\Research\Enums\JobRole;
+use App\Domain\Research\Enums\JobStatus;
 use App\Domain\Research\Enums\TaskStatus;
 use App\Jobs\AdvanceResearchJob;
 use App\Models\ResearchJob;
@@ -67,6 +68,13 @@ class ResumeSupervisorOnChildDone
 
         $parent = ResearchJob::find($child->parent_job_id);
         if (! $parent) {
+            return;
+        }
+
+        // The parent was stopped (which stopped this child's siblings too, and
+        // released its tasks). A late outcome from a child whose last turn was
+        // already in flight must not resurrect that plan.
+        if ($parent->status === JobStatus::Cancelled) {
             return;
         }
 

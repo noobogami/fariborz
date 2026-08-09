@@ -139,6 +139,33 @@ class ResearchJob extends Model
         return $this->status->isRunnable();
     }
 
+    /**
+     * Whether any supervisor above this sub-agent has been cancelled — stopping a
+     * job stops everything under it, so a worker whose parent (or its parent's
+     * parent) was stopped must stop too. Reads fresh, id-only rows; the depth
+     * guard also makes a corrupt parent chain impossible to loop on.
+     */
+    public function hasCancelledAncestor(): bool
+    {
+        $parentId = $this->parent_job_id;
+
+        for ($depth = 0; $parentId && $depth < 10; $depth++) {
+            $ancestor = static::query()
+                ->select(['parent_job_id', 'status'])
+                ->find($parentId);
+
+            if (! $ancestor) {
+                return false;
+            }
+            if ($ancestor->status === JobStatus::Cancelled) {
+                return true;
+            }
+            $parentId = $ancestor->parent_job_id;
+        }
+
+        return false;
+    }
+
     /** A convenience limit accessor with config fallback. */
     public function limit(string $key): int
     {

@@ -473,8 +473,11 @@ function jobHeaderActions() {
     return {
         status: @json($initial['job']['status']),
         init() { window.addEventListener('job-status', e => { this.status = e.detail; }); },
+        // Stopping cascades to every sub-agent this job spawned, so say so.
+        hasWorkers: @json(($initial['job']['worker_count'] ?? 0) > 0),
         async stop() {
-            if (!confirm('Stop this research job?')) return;
+            const also = this.hasWorkers ? ' Every sub-agent still running under it stops too.' : '';
+            if (!confirm('Stop this research job?' + also)) return;
             await window.postJson('/jobs/{{ $jobId }}/cancel', {});
             window.dispatchEvent(new CustomEvent('job-refresh'));
         },

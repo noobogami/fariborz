@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Application\Research\CancelResearch;
 use App\Application\Research\StartResearch;
 use App\Application\Research\Tracing\ResearchTraceReader;
 use App\Domain\Research\Contracts\ResearchJobRepository;
@@ -39,12 +40,16 @@ class ResearchJobController extends Controller
         );
     }
 
-    /** POST /api/research/{id}/cancel — a supervisor stops the run. */
-    public function cancel(string $id): JsonResponse
+    /** POST /api/research/{id}/cancel — stop the run AND every sub-agent under it. */
+    public function cancel(string $id, CancelResearch $cancel): JsonResponse
     {
         $job = $this->jobs->find($id);
-        $this->jobs->markCancelled($job);
+        $stopped = $cancel->handle($job);
 
-        return response()->json(['id' => $job->id, 'status' => $job->status->value]);
+        return response()->json([
+            'id' => $job->id,
+            'status' => $job->fresh()->status->value,
+            'stopped_jobs' => $stopped,
+        ]);
     }
 }

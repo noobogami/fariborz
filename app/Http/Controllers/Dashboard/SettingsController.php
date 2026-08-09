@@ -64,15 +64,22 @@ class SettingsController extends Controller
      *    Keep a free-text box so an offline operator can still type a name, and say
      *    why there's no list.
      *  - $models === []   → the gateway is up and serves NOTHING (fresh install).
-     *    A dropdown of nothing is useless, so keep the box but state the actual
-     *    problem and where to fix it — otherwise the page just looks broken.
+     *    A dropdown whose only entry SAYS there is nothing to pick, rather than an
+     *    empty-looking control the operator has to interpret.
      *  - non-empty        → a real dropdown. A saved value the gateway no longer
      *    serves (renamed/deleted model) stays selectable but is flagged `stale`,
      *    with a notice naming the model that will be used instead.
      *
+     * A model field must ALWAYS carry an option for the empty value, with a label
+     * that spells out what empty means here. The empty value is a real, and now
+     * default, setting ("no model pinned — use the gateway's"), and a <select>
+     * whose value matches no option renders as a blank box: the control looks
+     * broken and silently misreports the setting as whatever sits at the top of the
+     * list. Never let a model field render with nothing selected.
+     *
      * `ui = select` forces the dropdown control: the view otherwise renders any
      * ≤3-option select as a segmented button row, which mangles model names and
-     * turns the blank "use default" option into an invisible button.
+     * turns the blank option into an invisible button.
      *
      * @param  list<string>|null  $models  gateway model names, null = unreadable
      * @param  array<string,mixed>  $values  current setting values keyed by config path
@@ -88,22 +95,30 @@ class SettingsController extends Controller
                 }
 
                 $current = trim((string) ($values[$f['key']] ?? ''));
-                $blankOk = ! empty($f['allow_blank']);
 
                 if ($models === null) {
-                    $f['notice'] = 'Gateway unreachable — no live model list. Type a name, or fix the gateway in Tools ▸ Gateway.';
+                    $f['notice'] = 'Gateway unreachable — no live model list. Type a name, or fix the gateway in Tools ▸ Gateway.'
+                        .($current === '' ? ' Nothing is pinned right now.' : '');
 
                     continue;
                 }
 
+                $f['type'] = 'select';
+                $f['ui'] = 'select';
+
                 if ($models === []) {
-                    $f['notice'] = 'The gateway serves no models yet — add one in Tools ▸ Gateway models.'
+                    // Nothing to choose from. Say so IN the control — the operator
+                    // must be able to read "no model available" off the page.
+                    $f['blank_label'] = '— no models available on the gateway —';
+                    $f['options'] = $current === '' ? [''] : ['', $current];
+                    $f['stale'] = $current;
+                    $f['notice'] = 'The gateway serves no models yet — nothing can run. Add one in Tools ▸ Gateway models.'
                         .($current !== '' ? " Until then \"{$current}\" cannot run." : '');
 
                     continue;
                 }
 
-                $options = array_merge($blankOk ? [''] : [], $models);
+                $options = array_merge([''], $models);
                 if ($current !== '' && ! in_array($current, $options, true)) {
                     $options[] = $current;   // keep a stale value visible instead of silently swapping it
                     $f['stale'] = $current;
@@ -111,8 +126,9 @@ class SettingsController extends Controller
                         .($fallback !== null ? " — jobs run on \"{$fallback}\" until you pick one." : '.');
                 }
 
-                $f['type'] = 'select';
-                $f['ui'] = 'select';
+                $f['blank_label'] = ! empty($f['allow_blank'])
+                    ? '— use default model —'
+                    : '— none pinned · uses '.($fallback !== null ? "\"{$fallback}\"" : 'a gateway model').' —';
                 $f['options'] = array_values(array_unique($options));
             }
         }

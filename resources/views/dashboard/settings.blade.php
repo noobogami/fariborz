@@ -37,6 +37,9 @@
                 'ui' => $f['ui'] ?? '',
                 // Warning shown under the label: gateway down / empty / stale value.
                 'notice' => $f['notice'] ?? '',
+                // What the empty option READS as. Never render a blank one — see
+                // SettingsController::withModelDropdowns.
+                'blankLabel' => $f['blank_label'] ?? '— not set —',
                 // A saved value the gateway no longer serves, kept selectable.
                 'stale' => $f['stale'] ?? '',
                 'numeric' => in_array($f['type'], ['int', 'float'], true),
@@ -192,7 +195,7 @@
                                                     :style="{ border: '1px solid '+(f.edited?'rgba(242,182,97,.4)':'rgba(255,255,255,.1)'), color: f.edited?'#f7e2c2':'#e4e9ea' }">
                                                 <template x-for="o in f.options" :key="o">
                                                     <option :value="o" :selected="String($store.settings.cur(f)) === String(o)"
-                                                            x-text="o==='' ? '— use default model —' : (o===f.stale ? o + '  ·  not on gateway' : o)"
+                                                            x-text="o==='' ? f.blankLabel : (o===f.stale ? o + '  ·  not on gateway' : o)"
                                                             style="background:#101416;color:#e4e9ea"></option>
                                                 </template>
                                             </select>
