@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Application\Research\Llm\ModelCatalog;
+use App\Models\ModelBenchmark;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -15,6 +17,8 @@ use Tests\TestCase;
  */
 class ModelCatalogTest extends TestCase
 {
+    use RefreshDatabase;
+
     /** Model names the fake gateway serves; null = unreachable. */
     private ?array $served = null;
 
@@ -131,5 +135,29 @@ class ModelCatalogTest extends TestCase
         $this->assertSame('local-standard', $status['configured_model']);
         $this->assertSame('qwen3-normal', $status['active_model']);
         $this->assertSame(['local-standard', 'claude'], $status['stale_models']);
+    }
+
+    // ── §D — the last-resort fallback prefers the best-rated model ─────────────
+
+    public function test_pick_fallback_prefers_the_best_rated_model_when_nothing_configured_survives(): void
+    {
+        // Neither "local-standard" (default) nor "claude" (hard tier) survived on
+        // this gateway, so the LAST-RESORT arm decides. "qwen3-fast" scores
+        // highest but is broken and must be skipped.
+        $this->gatewayServes('qwen3-normal', 'qwen3-thinking', 'qwen3-fast');
+        ModelBenchmark::create(['model' => 'qwen3-normal', 'status' => 'done', 'score' => 60, 'rating' => 'usable']);
+        ModelBenchmark::create(['model' => 'qwen3-thinking', 'status' => 'done', 'score' => 95, 'rating' => 'strong']);
+        ModelBenchmark::create(['model' => 'qwen3-fast', 'status' => 'done', 'score' => 99, 'rating' => 'broken']);
+
+        $this->assertSame('qwen3-thinking', $this->catalog()->resolve('local-standard'));
+    }
+
+    public function test_pick_fallback_falls_back_to_the_first_gateway_model_when_nothing_is_rated(): void
+    {
+        // No benchmark rows at all — behaviour must be exactly what it was before
+        // benchmarking existed: the first name the gateway reports.
+        $this->gatewayServes('qwen3-normal', 'qwen3-thinking');
+
+        $this->assertSame('qwen3-normal', $this->catalog()->resolve('local-standard'));
     }
 }

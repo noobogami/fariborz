@@ -3,11 +3,17 @@
 namespace Tests\Feature;
 
 use App\Application\Research\Llm\ModelAvailability;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class ModelAvailabilityTest extends TestCase
 {
+    // pickReplacement now orders candidates by ModelBenchmark score (see
+    // orderByBenchmark), so it needs the model_benchmarks table to exist even
+    // in tests that never seed a row.
+    use RefreshDatabase;
+
     private function availability(): ModelAvailability
     {
         return app(ModelAvailability::class);

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Domain\Research\Enums\JobStatus;
 use App\Domain\Research\Enums\TaskStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
@@ -28,6 +29,12 @@ class ResearchTask extends Model
      */
     public const WORKER_ERROR_PREFIX = '⚠ Worker error: ';
 
+    /**
+     * DISPLAY-ONLY status (never a TaskStatus, never written): the task row still
+     * says "in flight" but nothing is actually working on it.
+     */
+    public const DISPLAY_STOPPED = 'stopped';
+
     protected $guarded = [];
 
     protected $attributes = [
@@ -40,6 +47,28 @@ class ResearchTask extends Model
         'depends_on' => 'array',
         'outputs' => 'array',
     ];
+
+    /**
+     * The status to SHOW for this task. `in_progress`/`reviewing` is a claim that a
+     * sub-agent is working on it RIGHT NOW — a lie once the supervisor that owns the
+     * task is over, or the sub-agent holding it was cancelled. Both leave the row
+     * un-released: a job stopped before CancelResearch existed never reset its tasks,
+     * and a cancel that races an in-flight supervisor iteration can see the iteration
+     * re-delegate right after the reset. Rather than parade a dead worker as running,
+     * report it as `stopped`; the underlying TaskStatus is left untouched, so a rerun
+     * still sees the real state.
+     *
+     * @param  ResearchJob  $owner  the supervisor this task belongs to
+     * @param  ?string  $holderStatus  status of the sub-agent holding it (child_job_id), if known
+     */
+    public function displayStatus(ResearchJob $owner, ?string $holderStatus = null): string
+    {
+        $inFlight = in_array($this->status, [TaskStatus::InProgress, TaskStatus::Reviewing], true);
+
+        return $inFlight && ($owner->status->isTerminal() || $holderStatus === JobStatus::Cancelled->value)
+            ? self::DISPLAY_STOPPED
+            : $this->status->value;
+    }
 
     /**
      * True when this task's last outcome was a WORKER FAILURE (its `result` carries

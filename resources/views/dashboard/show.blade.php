@@ -36,7 +36,23 @@
                        style="font-size:8.5px;letter-spacing:.05em;padding:2px 7px;border-radius:5px;background:rgba(62,207,142,.1);border:1px solid rgba(62,207,142,.3);color:#5fdda5;text-decoration:none">▶ PREVIEW</a>
                 @endif
             </div>
-            <h1 style="margin:0;font-size:19px;line-height:1.32;font-weight:600;letter-spacing:-.015em;color:#f2f5f6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:92ch">{{ $initial['job']['goal'] }}</h1>
+            {{-- The goal is clamped to 2 lines so the frozen header stays small, but a long
+                 prompt must still be readable IN FULL — expand it in place (capped + scrollable
+                 so a huge prompt can't push the rest of the header off screen). --}}
+            <div x-data="{ full: false, overflows: false }"
+                 x-init="$nextTick(() => overflows = $refs.goal.scrollHeight > $refs.goal.clientHeight + 2)">
+                {{-- object (not string) :style — a string binding REPLACES the style
+                     attribute, which would drop the typography below when expanded --}}
+                <h1 x-ref="goal" @click="if (overflows) full = !full"
+                    :style="full
+                        ? { display:'block', webkitLineClamp:'unset', overflow:'auto', maxHeight:'40vh', whiteSpace:'pre-wrap' }
+                        : { display:'-webkit-box', webkitLineClamp:'2', overflow:'hidden', maxHeight:'none', whiteSpace:'normal' }"
+                    :title="overflows && !full ? 'Click to see the full prompt' : ''"
+                    style="margin:0;font-size:19px;line-height:1.32;font-weight:600;letter-spacing:-.015em;color:#f2f5f6;max-width:92ch;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer">{{ $initial['job']['goal'] }}</h1>
+                <button x-show="overflows" @click="full = !full" type="button" class="fz-mono"
+                        style="margin-top:5px;background:none;border:none;padding:0;cursor:pointer;color:#ea638c;font-size:9.5px;letter-spacing:.11em"
+                        x-text="full ? '↤ SHOW LESS' : 'SHOW FULL PROMPT ↧'"></button>
+            </div>
         </div>
         <div class="flex gap-2 shrink-0" x-data="jobHeaderActions()">
             <button x-show="['running','waiting','pending'].includes(status)" @click="stop()"
@@ -86,9 +102,9 @@
         <div class="flex flex-wrap" style="gap:28px;padding:22px 26px 20px">
             <div style="flex:1 1 440px;min-width:0">
                 <div class="flex flex-wrap items-center gap-2" style="margin-bottom:14px">
-                    <div :style="{ width:'9px', height:'9px', borderRadius:'50%', background: hero.accent, animation: (activity.active && !isDone) ? 'orbPulse 1.9s ease-out infinite' : 'none' }"></div>
+                    <div :style="{ width:'9px', height:'9px', borderRadius:'50%', background: hero.accent, animation: (activity.active && !isOver) ? 'orbPulse 1.9s ease-out infinite' : 'none' }"></div>
                     <span class="fz-mono" style="font-size:10.5px;letter-spacing:.14em" :style="{ color: hero.accent }" x-text="heroStatus"></span>
-                    <span class="fz-mono" style="font-size:10.5px;color:#8a9499" x-text="(isDone ? 'total ' : 'elapsed ') + elapsed"></span>
+                    <span class="fz-mono" style="font-size:10.5px;color:#8a9499" x-text="(isOver ? 'total ' : 'elapsed ') + elapsed"></span>
                     <template x-if="isDone">
                         <span class="fz-mono" style="font-size:10px;letter-spacing:.07em;padding:2px 9px;border-radius:20px;background:rgba(62,207,142,.12);border:1px solid rgba(62,207,142,.3);color:#5fdda5">GOAL SATISFIED</span>
                     </template>
@@ -105,7 +121,7 @@
                         <span :style="{ color: opFg }" style="flex:0 0 auto" x-text="opLabel"></span>
                         <span style="color:#39424f;flex:0 0 auto">│</span>
                         <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" x-text="activity.waiting_for || activity.label"></span>
-                        <span x-show="activity.since_seconds !== null && !isDone" style="margin-left:auto;flex:0 0 auto" :style="{ color: opFg }" x-text="activity.since_seconds + 's'"></span>
+                        <span x-show="activity.since_seconds !== null && !isOver" style="margin-left:auto;flex:0 0 auto" :style="{ color: opFg }" x-text="activity.since_seconds + 's'"></span>
                     </div>
                 </template>
 
@@ -129,8 +145,8 @@
                     </div>
                 </template>
 
-                {{-- thinking stream (running) --}}
-                <template x-if="!isDone && activity.thinking_preview">
+                {{-- thinking stream (running only — a finished job has nothing streaming) --}}
+                <template x-if="!isOver && activity.thinking_preview">
                     <div style="margin-top:16px;border-radius:11px;border:1px solid rgba(255,255,255,.07);background:linear-gradient(180deg,rgba(16,20,22,.35),rgba(16,20,22,.85));overflow:hidden">
                         <div class="flex items-center gap-2" style="padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.06)">
                             <span class="fz-mono" style="font-size:9.5px;letter-spacing:.14em;color:#96a0a5">THINKING STREAM</span>
@@ -306,7 +322,19 @@
                                     </div>
                                     <template x-if="open[s.id]">
                                         <div @click.stop style="border-top:1px solid rgba(255,255,255,.07);padding:14px;background:rgba(0,0,0,.22)">
-                                            <div style="margin-bottom:12px">
+                                            {{-- A human prompt is shown VERBATIM (the row/summary above is clipped) --}}
+                                            <template x-if="s._key === 'input'">
+                                                <div style="margin-bottom:12px">
+                                                    <div class="flex items-center" style="gap:10px;margin-bottom:5px">
+                                                        <span class="fz-mono" style="font-size:9px;letter-spacing:.13em;color:#8a9499" x-text="s.tool === 'prompt' ? 'FULL PROMPT' : 'FULL GUIDANCE'"></span>
+                                                        <span class="fz-mono" style="font-size:9px;color:#5b6469" x-text="fullPrompt(s).length + ' chars'"></span>
+                                                        <button @click.stop="copyText(fullPrompt(s))" type="button"
+                                                                class="fz-mono" style="margin-left:auto;background:none;border:none;padding:0;cursor:pointer;color:#ea638c;font-size:10px">copy</button>
+                                                    </div>
+                                                    <pre class="fz-mono fz-scroll" style="margin:0;padding:12px 14px;border-radius:9px;background:#0e1214;border:1px solid rgba(234,99,140,.18);font-size:12px;line-height:1.7;color:#dbe2e4;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-word" x-text="fullPrompt(s)"></pre>
+                                                </div>
+                                            </template>
+                                            <div x-show="s._key !== 'input'" style="margin-bottom:12px">
                                                 <div class="fz-mono" style="font-size:9px;letter-spacing:.13em;color:#8a9499;margin-bottom:5px">REASONING</div>
                                                 <div style="font-size:12.5px;line-height:1.65;color:#b6bfc3;max-width:82ch" x-text="s.summary"></div>
                                             </div>
@@ -349,8 +377,12 @@
                         <span class="fz-mono" style="margin-left:auto;font-size:9.5px;color:#96a0a5" x-text="workerActiveLabel"></span>
                     </div>
                     <template x-for="w in workers" :key="w.id">
+                        {{-- hover lives in Alpine state, NOT an inline onmouseover: that
+                             wrote borderColor straight onto the element with nothing to
+                             undo it, so a hovered card kept the highlight forever. --}}
                         <a :href="'/jobs/' + w.id" style="display:block;border-radius:13px;padding:13px;color:#eef1f2;text-decoration:none"
-                           :style="{ border: '1px solid '+w.cardBd, background: w.cardBg }" onmouseover="this.style.borderColor='rgba(234,99,140,.5)'">
+                           x-data="{ hover: false }" @mouseenter="hover = true" @mouseleave="hover = false"
+                           :style="{ border: '1px solid ' + (hover ? w.hoverBd : w.cardBd), background: w.cardBg }">
                             <div class="flex items-center" style="gap:8px">
                                 <div style="width:6px;height:6px;border-radius:50%" :style="{ background: w.tone.chipFg, animation: w.tone.anim }"></div>
                                 <span class="fz-mono" style="font-size:11.5px;color:#dbe2e4" x-text="'job_' + String(w.id).slice(-8)"></span>
@@ -532,6 +564,14 @@ function jobDetail() {
         reviewing:       { tone: Object.assign({}, TONES.review, { titleFg:'#e4d4ff', row:'rgba(168,127,249,.05)' }), label:'REVIEWING' },
         done:            { tone: Object.assign({}, TONES.ok,   { nodeFg:'#5fdda5', titleFg:'#c8d0d3', row:'transparent' }), label:'DONE' },
         failed:          { tone: Object.assign({}, TONES.err,  { titleFg:'#ffb0b0', row:'rgba(255,107,107,.04)' }), label:'FAILED' },
+        // Display-only (server-derived): the row still says in-flight but its job/worker
+        // is over. Must read as INERT — no red, no glow, no breathing, nothing that
+        // could be mistaken for the live IN PROGRESS tone. Dimmer than PENDING, since
+        // a stopped task isn't waiting its turn either.
+        stopped:         { tone: { nodeBg:'#1d2225', nodeBd:'rgba(255,255,255,.08)', nodeFg:'#6f797e', nodeGlow:'none',
+                                   cardBg:'#1a1f21', cardBd:'rgba(255,255,255,.06)', toolFg:'#8a9499',
+                                   chipBg:'rgba(255,255,255,.04)', chipFg:'#7d878c', chipBd:'rgba(255,255,255,.1)',
+                                   anim:'none', titleFg:'#7d878c', row:'transparent' }, label:'STOPPED' },
     };
     const taskTone = s => TASK_TONE[s] || TASK_TONE.pending;
 
@@ -579,6 +619,13 @@ function jobDetail() {
         get isSupervisor() { return this.role === 'supervisor'; },
         get isWorker() { return this.role === 'worker'; },
         get isDone() { return this.job.status === 'completed'; },
+        get isStopped() { return this.job.status === 'cancelled'; },
+        get isFailed() { return this.job.status === 'failed'; },
+        // Nothing is happening in this job any more, whatever the outcome. Anything
+        // that reads as ALIVE — the glow, the pulsing orb, the "SUPERVISING" phase,
+        // the thinking caret — must be off for these, or a stopped job keeps looking
+        // like a running one.
+        get isOver() { return this.isDone || this.isStopped || this.isFailed; },
 
         // ── hero ────────────────────────────────────────────────────────────
         get hero() {
@@ -586,6 +633,18 @@ function jobDetail() {
                 bd:'rgba(62,207,142,.22)', accent:'#3ecf8e', titleFg:'#8ff0c4',
                 bg:'radial-gradient(1100px 320px at 12% -40%,rgba(62,207,142,.14),transparent 62%),linear-gradient(180deg,#20272a,#1b2021)',
                 shadow:'0 24px 60px -34px rgba(62,207,142,.45),inset 0 1px 0 rgba(255,255,255,.04)',
+            };
+            // Stopped by Father: inert grey, no accent glow at all.
+            if (this.isStopped) return {
+                bd:'rgba(255,255,255,.09)', accent:'#8a9499', titleFg:'#a3adb1',
+                bg:'linear-gradient(180deg,#1e2325,#1b2021)',
+                shadow:'inset 0 1px 0 rgba(255,255,255,.03)',
+            };
+            // Errored out: red enough to read as a failure, but flat — it isn't live.
+            if (this.isFailed) return {
+                bd:'rgba(255,107,107,.22)', accent:'#ff8f8f', titleFg:'#ffb0b0',
+                bg:'radial-gradient(1100px 320px at 12% -40%,rgba(255,107,107,.08),transparent 62%),linear-gradient(180deg,#20272a,#1b2021)',
+                shadow:'inset 0 1px 0 rgba(255,255,255,.03)',
             };
             return {
                 bd:'rgba(234,99,140,.24)', accent:'#ea638c', titleFg:'#ffd9da',
@@ -595,6 +654,8 @@ function jobDetail() {
         },
         get heroStatus() {
             if (this.isDone) return 'COMPLETED · ' + (this.job.finished_at || '');
+            if (this.isStopped) return 'STOPPED · ' + (this.job.finished_at || '');
+            if (this.isFailed) return 'FAILED · ' + (this.job.finished_at || '');
             if (this.isSupervisor) return 'SUPERVISING · ITERATION ' + (this.job.iteration ?? 0);
             return (this.job.status || 'idle').toUpperCase() + ' · ITERATION ' + (this.job.iteration ?? 0);
         },
@@ -604,10 +665,14 @@ function jobDetail() {
                 const c = this.taskCounts;
                 return c.done + ' of ' + c.total + ' tasks done · ' + this.workers.length + ' workers';
             }
+            if (this.isStopped) return 'stopped before finishing';
+            if (this.isFailed) return this.job.last_error ? 'errored out' : 'no result';
             return this.activity.active ? 'executing' : 'idle';
         },
         get headline() {
             if (this.isDone) return 'answer delivered';
+            if (this.isStopped) return 'stopped';
+            if (this.isFailed) return 'failed';
             const a = this.activity || {};
             if (a.phase === 'running_tool') return (a.label || '').replace(/^Running tool:\s*/, '');
             if (a.phase === 'thinking') return 'reasoning';
@@ -616,13 +681,20 @@ function jobDetail() {
         },
         get opLabel() {
             if (this.isDone) return 'CLOSED';
+            if (this.isStopped) return 'STOPPED';
+            if (this.isFailed) return 'FAILED';
             if (this.isSupervisor) return 'SUPERVISOR';
             const p = this.activity.phase;
             if (p === 'running_tool') return 'RUNNING';
             if (['queued','waiting'].includes(p)) return 'WAITING';
             return 'ACTIVE';
         },
-        get opFg() { return this.isDone ? '#5fdda5' : (this.activity.waiting_for ? '#f2b661' : '#ea638c'); },
+        get opFg() {
+            if (this.isDone) return '#5fdda5';
+            if (this.isStopped) return '#8a9499';
+            if (this.isFailed) return '#ff8f8f';
+            return this.activity.waiting_for ? '#f2b661' : '#ea638c';
+        },
 
         get ring() {
             if (this.isSupervisor) {
@@ -668,6 +740,7 @@ function jobDetail() {
             if (c.in_progress) bits.push(c.in_progress + ' in progress');
             if (c.awaiting_review) bits.push(c.awaiting_review + ' awaiting review');
             if (c.reviewing) bits.push(c.reviewing + ' reviewing');
+            if (c.stopped) bits.push(c.stopped + ' stopped');
             if (c.failed) bits.push(c.failed + ' failed');
             return bits.join(' · ');
         },
@@ -675,20 +748,24 @@ function jobDetail() {
             return (this.extras.tasks || []).map(t => {
                 const tt = taskTone(t.status);
                 return { ...t, tone: tt.tone, statusLabel: tt.label,
-                    resultLabel: t.status === 'failed' ? 'WORKER FAILURE' : t.status === 'in_progress' ? 'WORKER PROGRESS' : t.status === 'pending' ? 'STATE' : t.status === 'reviewing' ? 'UNDER REVIEW' : 'WORKER RESULT' };
+                    resultLabel: t.status === 'failed' ? 'WORKER FAILURE' : t.status === 'in_progress' ? 'WORKER PROGRESS' : t.status === 'pending' ? 'STATE' : t.status === 'reviewing' ? 'UNDER REVIEW' : t.status === 'stopped' ? 'PROGRESS WHEN STOPPED' : 'WORKER RESULT' };
             });
         },
         toggleTask(seq) { this.taskOpen[seq] = !this.taskOpen[seq]; },
         get workers() {
             return (this.extras.workers || []).map(w => {
-                const tt = taskTone(w.status === 'running' ? 'in_progress' : w.status === 'completed' ? 'done' : w.status);
+                const tt = taskTone(w.status === 'running' ? 'in_progress' : w.status === 'completed' ? 'done'
+                                  : w.status === 'cancelled' ? 'stopped' : w.status);
                 const frac = w.max_iterations ? Math.min(1, w.iteration / w.max_iterations) : 0;
                 const inProg = ['running','in_progress'].includes(w.status);
                 return { ...w, tone: tt.tone, statusLabel: (w.status || '').toUpperCase(),
                     iterW: Math.round(frac*100) + '%',
                     confFg: w.confidence == null ? '#8a9499' : w.confidence >= 0.8 ? '#3ecf8e' : w.confidence >= 0.5 ? '#f2b661' : '#ff6b6b',
                     cardBg: inProg ? 'linear-gradient(180deg,rgba(234,99,140,.10),rgba(26,31,33,.9))' : '#1a1f21',
-                    cardBd: inProg ? 'rgba(234,99,140,.34)' : w.status === 'failed' ? 'rgba(255,107,107,.24)' : 'rgba(255,255,255,.07)' };
+                    cardBd: inProg ? 'rgba(234,99,140,.34)' : w.status === 'failed' ? 'rgba(255,107,107,.24)' : 'rgba(255,255,255,.07)',
+                    // Hovering must stay in the card's OWN register — a stopped worker
+                    // brightening to the live pink reads as "it's running again".
+                    hoverBd: inProg ? 'rgba(234,99,140,.5)' : w.status === 'failed' ? 'rgba(255,107,107,.45)' : 'rgba(255,255,255,.2)' };
             });
         },
         get workerActiveLabel() {
@@ -753,6 +830,11 @@ function jobDetail() {
             // follow-up guidance (resumed) — are shown as their OWN nodes so you can
             // see exactly what was asked, and when. They're pulled out of the normal
             // iteration grouping below.
+            //
+            // `summary` is CLIPPED server-side (research.trace.summary_max_chars), so it
+            // is only the row preview. `full` carries the verbatim prompt: for the start
+            // node it's the job's own goal (always complete in the API payload); for a
+            // follow-up it comes from the event payload, loaded on expand — see fullPrompt().
             const inputs = this.timeline
                 .filter(e => e.type === 'job_started' || e.type === 'resumed')
                 .map(e => {
@@ -762,7 +844,8 @@ function jobDetail() {
                         : (after(e.summary, /guidance:\s*([\s\S]*)$/i) || e.summary);
                     return { id: e.id, iteration: e.iteration, glyph: '📝',
                              tool: isStart ? 'prompt' : 'new guidance', outcome: text,
-                             summary: text, status: STATUS['input'], dur: '', tone: TONES['input'],
+                             summary: text, full: isStart ? (this.job.goal || text) : '',
+                             status: STATUS['input'], dur: '', tone: TONES['input'],
                              _key: 'input', isTool: false, seq: e.seq || 0 };
                 });
 
@@ -845,6 +928,16 @@ function jobDetail() {
             }
         },
         pretty(v) { return (typeof v === 'string') ? v : JSON.stringify(v, null, 2); },
+
+        // The verbatim human prompt behind an input node. Prefer the step's own copy
+        // (the start node has the job goal in hand), then the event payload once it
+        // has loaded, and only fall back to the clipped summary if neither is there
+        // (old events recorded before the payload carried `goal`).
+        fullPrompt(s) {
+            const p = this.payloads[s.id];
+            return s.full || (p && (p.goal || p.guidance)) || s.summary || '';
+        },
+        copyText(t) { if (t && navigator.clipboard) navigator.clipboard.writeText(t); },
 
         async showRaw(id) {
             this.rawModal = { id, loading: true, text: '' };

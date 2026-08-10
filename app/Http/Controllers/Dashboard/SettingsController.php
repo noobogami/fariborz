@@ -10,7 +10,9 @@ use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Settings\SettingsService;
 use App\Http\Controllers\Controller;
 use App\Models\CustomTool;
+use App\Models\ModelBenchmark;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
 class SettingsController extends Controller
 {
@@ -42,8 +44,12 @@ class SettingsController extends Controller
             'browser' => $this->browser->status(),
             'sandbox' => $this->sandbox->status(),
             'gateway' => $gateway,
-            'gatewayModels' => $this->litellm->list(),
+            'gatewayModels' => $gatewayModels = $this->litellm->list(),
             'gatewayProviders' => (array) config('litellm.providers', []),
+            // Seeds the benchmark chips on first paint; the Tools panel then
+            // polls GET gateway.benchmark.status for live updates while a run
+            // is in flight, same pattern as gatewayModels above.
+            'benchmarks' => ModelBenchmark::whereIn('model', array_column($gatewayModels, 'name'))->get()->keyBy('model'),
             'tools' => $this->registry->definitions(),
             'skills' => CustomTool::latest()->get(),
             'llmDriver' => config('research.llm.driver'),
@@ -87,6 +93,7 @@ class SettingsController extends Controller
     private function withModelDropdowns(array $schema, ?array $models, array $values): array
     {
         $fallback = $this->catalog->fallback();
+        $ttlDays = max(1, (int) config('research.llm.benchmark_ttl_days', 14));
 
         foreach ($schema as &$fields) {
             foreach ($fields as &$f) {
@@ -119,11 +126,28 @@ class SettingsController extends Controller
                 }
 
                 $options = array_merge([''], $models);
+                // Every live option gets a benchmark rating in ITS LABEL (score,
+                // rating, latency), because that's where a model is actually
+                // CHOSEN — the whole point of this task. ratedBy() over the same
+                // list the dropdown shows, one query per field.
+                $rated = ModelBenchmark::ratedBy($models);
+                $f['option_labels'] = collect($models)
+                    ->mapWithKeys(fn ($m) => [$m => $this->benchmarkOptionLabel($m, $rated)])
+                    ->all();
+
                 if ($current !== '' && ! in_array($current, $options, true)) {
                     $options[] = $current;   // keep a stale value visible instead of silently swapping it
                     $f['stale'] = $current;
                     $f['notice'] = "\"{$current}\" is not on the gateway (renamed or removed)"
                         .($fallback !== null ? " — jobs run on \"{$fallback}\" until you pick one." : '.');
+                } elseif ($current !== '') {
+                    // The name is still live — the only other thing worth a notice
+                    // is what the benchmark says ABOUT it: broken (can't drive the
+                    // agent at all — see ModelRouter's fail-open reroute), never
+                    // benchmarked, or benchmarked so long ago it may not describe
+                    // the model anymore (see §E — a benchmark is invalidated when
+                    // the model it measured changes).
+                    $f['notice'] = $this->benchmarkNotice($current, $rated, $ttlDays) ?? '';
                 }
 
                 $f['blank_label'] = ! empty($f['allow_blank'])
@@ -134,6 +158,51 @@ class SettingsController extends Controller
         }
 
         return $schema;
+    }
+
+    /**
+     * The dropdown option label for ONE gateway model: its rating, score and
+     * latency when it's been measured, else a plain "not benchmarked" — the
+     * "did it even run?" confusion the spec's complaint was about, made
+     * unambiguous right where the model is picked.
+     */
+    private function benchmarkOptionLabel(string $model, Collection $rated): string
+    {
+        $row = $rated->get($model);
+        if ($row === null || $row->status !== 'done' || $row->score === null || $row->rating === null) {
+            return "{$model} — not benchmarked";
+        }
+
+        $latency = $row->median_ms === null ? '' : ' · '.number_format($row->median_ms / 1000, 1).'s';
+
+        return "{$model} — {$row->score} {$row->rating}{$latency}";
+    }
+
+    /**
+     * A notice for the field's CURRENT value, specifically about its benchmark
+     * — only when it's still a live gateway name (a renamed/removed name gets
+     * its own notice above, which takes priority). Null when there's nothing
+     * worth flagging (rated fine and recent, or never benchmarked and that's
+     * already obvious from the option label alone — still worth a nudge here
+     * since the notice is what's visible without opening the dropdown).
+     */
+    private function benchmarkNotice(string $model, Collection $rated, int $ttlDays): ?string
+    {
+        $row = $rated->get($model);
+
+        if ($row !== null && $row->rating === 'broken') {
+            return "\"{$model}\" is rated broken — it fails the tool-call envelope and cannot drive the agent. Jobs on this tier are automatically routed to another model until you pick a different one.";
+        }
+
+        if ($row === null || $row->status !== 'done') {
+            return "\"{$model}\" hasn't been benchmarked yet — run one from Tools ▸ Gateway models to see how it performs.";
+        }
+
+        if ($row->ran_at !== null && $row->ran_at->lt(now()->subDays($ttlDays))) {
+            return "\"{$model}\" was last benchmarked ".$row->ran_at->diffForHumans().' — results may no longer reflect it. Consider re-running the benchmark.';
+        }
+
+        return null;
     }
 
     public function update(Request $request)

@@ -116,17 +116,72 @@
                     {{-- Gateway models — add/remove models on the LiteLLM gateway (DB-backed) --}}
                     <div x-show="gateway.is_active_driver || gateway.reachable"
                          style="border-radius:13px;border:1px solid rgba(255,255,255,.07);background:#151a1c;padding:15px;margin-bottom:14px">
-                        <div class="flex items-center" style="gap:9px;margin-bottom:11px">
+                        <div class="flex items-center flex-wrap" style="gap:9px;margin-bottom:11px">
                             <span class="fz-mono" style="font-size:9.5px;letter-spacing:.13em;color:#8a9499">GATEWAY MODELS</span>
-                            <button type="button" @click="checkHealth()" :disabled="checkingHealth" title="LiteLLM /health — makes a real call to every model" class="fz-mono"
-                                    style="margin-left:auto;font-size:9px;color:#c8d0d3;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:3px 8px;cursor:pointer"
-                                    x-text="checkingHealth ? 'checking…' : 'check health'"></button>
-                            <a :href="(gateway.base_url||'').replace(/\/v1\/?$/,'') + '/ui'" target="_blank" class="fz-mono" style="font-size:9px;color:#8e9a9f;text-decoration:none">LiteLLM UI ↗</a>
+                            <div class="flex items-center flex-wrap" style="margin-left:auto;gap:8px">
+                                <label class="fz-mono flex items-center" style="font-size:9px;color:#8a9499;gap:5px;cursor:pointer" title="also run the context/needle-in-haystack probe — slower, catches a truncated num_ctx">
+                                    <input type="checkbox" x-model="benchmarkDeep" style="accent-color:#ea638c"> deep
+                                </label>
+                                <button type="button" @click="benchmarkAll()" :disabled="benchmarkBusy" title="probe every model and score it — async, a local model can take 1-2 min per probe" class="fz-mono"
+                                        style="font-size:9px;color:#c8d0d3;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:3px 8px;cursor:pointer"
+                                        x-text="benchmarkBusy ? 'benchmarking…' : 'benchmark all'"></button>
+                                <button type="button" @click="checkHealth()" :disabled="checkingHealth" title="LiteLLM /health — makes a real call to every model" class="fz-mono"
+                                        style="font-size:9px;color:#c8d0d3;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:3px 8px;cursor:pointer"
+                                        x-text="checkingHealth ? 'checking…' : 'check health'"></button>
+                                <button type="button" @click="loadTierSuggestions()" :disabled="suggestingTiers" title="preview what applying the benchmark evidence would change on the tier dropdowns — nothing is changed until you click Apply" class="fz-mono"
+                                        style="font-size:9px;color:#c8d0d3;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:3px 8px;cursor:pointer"
+                                        x-text="suggestingTiers ? 'checking…' : 'suggest tiers'"></button>
+                                <a :href="(gateway.base_url||'').replace(/\/v1\/?$/,'') + '/ui'" target="_blank" class="fz-mono" style="font-size:9px;color:#8e9a9f;text-decoration:none">LiteLLM UI ↗</a>
+                            </div>
                         </div>
+
+                        {{-- While a benchmark run is in flight, say which model and that it's slow. --}}
+                        <div x-show="benchmarkBusy" class="fz-mono" style="font-size:9.5px;color:#f5c987;margin-bottom:10px" x-text="benchmarkStatusLabel"></div>
+
+                        {{-- A run finished but the Configuration tab has unsaved edits, so we
+                             did not reload over them — its model dropdowns still show the OLD
+                             ratings ("not benchmarked"). Say so, and let the operator reload
+                             once their edits are saved or discarded. --}}
+                        <div x-show="ratingsStale" x-cloak class="fz-mono"
+                             style="display:flex;align-items:center;gap:9px;font-size:9.5px;color:#f5c987;margin-bottom:10px;padding:7px 10px;border-radius:7px;background:rgba(245,201,135,.07);border:1px solid rgba(245,201,135,.22)">
+                            <span>benchmark finished — the model dropdowns in Configuration still show the old ratings (you have unsaved changes, so nothing was reloaded).</span>
+                            <button type="button" @click="location.reload()" class="fz-mono"
+                                    style="flex:none;font-size:9px;letter-spacing:.08em;padding:4px 10px;border-radius:20px;border:1px solid rgba(245,201,135,.35);background:rgba(245,201,135,.1);color:#f5c987;cursor:pointer">reload</button>
+                        </div>
+
+                        {{-- §B "apply suggested tiers" — a PREVIEW the operator asked for
+                             (never automatic, never on a benchmark run finishing): for each
+                             tier, current -> proposed with the proposed model's score. A row
+                             with no change is marked so explicitly — this is the exact "did it
+                             even run?" confusion that prompted the feature. Apply writes
+                             through the same SettingsService path the Configuration form uses. --}}
+                        <template x-if="tierSuggestions">
+                            <div style="border-radius:10px;border:1px solid rgba(255,255,255,.07);background:#101416;padding:10px 11px;margin-bottom:13px;display:flex;flex-direction:column;gap:7px">
+                                <template x-for="row in tierSuggestionRows" :key="row.tier">
+                                    <div class="fz-mono flex items-center" style="gap:8px;font-size:10px">
+                                        <span style="width:52px;flex:0 0 auto;color:#a3adb1;text-transform:uppercase;letter-spacing:.06em" x-text="row.tier"></span>
+                                        <span style="color:#8a9499;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="row.current || '— none —'"></span>
+                                        <span style="color:#5a6367;flex:0 0 auto">→</span>
+                                        <span :style="{ color: row.unchanged ? '#8a9499' : '#5fdda5', minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }"
+                                              x-text="row.proposed ? (row.proposed + (row.score != null ? '  ('+row.score+')' : '')) : (row.current || '— none —')"></span>
+                                        <span style="margin-left:auto;flex:0 0 auto" :style="{ color: row.unchanged ? '#5a6367' : '#f5c987' }" x-text="row.unchanged ? 'already correct' : 'change'"></span>
+                                    </div>
+                                </template>
+                                <div class="flex items-center" style="gap:10px;margin-top:2px">
+                                    <button type="button" @click="applyTierSuggestions()" :disabled="applyingTiers || !hasTierChanges" class="fz-mono"
+                                            :style="{ opacity:(applyingTiers||!hasTierChanges)?.5:1, cursor:(applyingTiers||!hasTierChanges)?'default':'pointer', fontSize:'10.5px', fontWeight:'600', padding:'6px 12px', borderRadius:'7px', border:'1px solid rgba(255,217,218,.35)', background:'linear-gradient(145deg,#ea638c,#89023e)', color:'#fff' }"
+                                            x-text="applyingTiers ? 'Applying…' : 'Apply suggested tiers'"></button>
+                                    <span class="fz-mono" style="font-size:9.5px;color:#8a9499" x-text="tierApplyMsg"></span>
+                                </div>
+                            </div>
+                        </template>
 
                         {{-- current models — ALSO the live health indicator. Dot: grey =
                              unknown, slow-blinking = checking, green = up, red = down
-                             (hover a red chip for the error). Driven by "check health". --}}
+                             (hover a red chip for the error). Driven by "check health".
+                             A model that has been BENCHMARKED also carries a rating badge
+                             (score/rating/latency/suggested tier) — hover it for any failed
+                             probe's detail (a num_ctx hint when it's the context probe alone). --}}
                         <div class="flex flex-wrap items-center" style="gap:6px;margin-bottom:13px">
                             <template x-for="m in gatewayModels" :key="m.name">
                                 <span class="fz-mono flex items-center" :title="modelHealthError[m.name] || ''"
@@ -134,6 +189,13 @@
                                     <span style="width:7px;height:7px;border-radius:50%;flex:0 0 7px"
                                           :style="{ background: dotColor(m.name), animation: checkingHealth ? 'breathe 1.1s ease-in-out infinite' : 'none' }"></span>
                                     <span x-text="m.name"></span>
+                                    <template x-if="benchmarkOf(m.name)">
+                                        <span class="fz-mono" :title="benchmarkTitle(m.name)"
+                                              :style="{ padding:'1px 6px', borderRadius:'5px', fontSize:'9px', background: ratingColors(benchmarkOf(m.name).rating).bg, color: ratingColors(benchmarkOf(m.name).rating).fg, border:'1px solid '+ratingColors(benchmarkOf(m.name).rating).bd }"
+                                              x-text="benchmarkLabel(m.name)"></span>
+                                    </template>
+                                    <button type="button" @click="benchmarkOne(m.name)" :disabled="isBenchmarking(m.name)" title="benchmark this model" style="background:none;border:none;color:#8a9499;cursor:pointer;font-size:10px;padding:0;line-height:1"
+                                            x-text="isBenchmarking(m.name) ? '…' : '⟳'"></button>
                                     <button type="button" @click="removeModel(m.name)" title="remove" style="background:none;border:none;color:#8a9499;cursor:pointer;font-size:10px;padding:0;line-height:1">✕</button>
                                 </span>
                             </template>
@@ -285,6 +347,20 @@ function toolsPanel() {
         gateway: @json($gateway),
         gatewayModels: @json($gatewayModels ?? []),
         gatewayProviders: @json($gatewayProviders ?? []),
+        benchmarks: @json($benchmarks ?? []),   // model name -> row {status, score, rating, median_ms, suggested_tier, probes, low_confidence, error, ran_at}
+        benchmarkTtlDays: {{ (int) config('research.llm.benchmark_ttl_days', 14) }},
+        benchmarkDeep: false,
+        // A run finished while the Configuration tab had unsaved edits, so its
+        // server-rendered ratings/notices are stale and we did NOT reload over
+        // the operator's work — see ratingsWentStale().
+        ratingsStale: false,
+        // §B "apply suggested tiers" — null = never previewed yet, {} once loaded
+        // (GET gateway.benchmark.suggestions). Only ever changes state when the
+        // operator clicks — see loadTierSuggestions()/applyTierSuggestions().
+        tierSuggestions: null,
+        suggestingTiers: false,
+        applyingTiers: false,
+        tierApplyMsg: '',
         mform: { provider: 'ollama', model: '', name: '', api_key: '', num_ctx: {{ (int) config('litellm.ollama_default_num_ctx', 16384) }}, think: false },
         adding: false,
         addMsg: '',
@@ -296,13 +372,170 @@ function toolsPanel() {
         openSchema: {},
         testQuery: '', testResults: [], testError: '', testing: false,
 
-        start() { this.timer = setInterval(() => this.refresh(), 5000); },
+        start() {
+            this.timer = setInterval(() => this.refresh(), 5000);
+            // A dedicated, tighter poll for the benchmark chain — only actually
+            // fetches while something is queued/running, so it's a no-op (one
+            // cheap object read) the rest of the time.
+            this.benchmarkTimer = setInterval(() => { if (this.benchmarkBusy) this.refreshBenchmarks(); }, 3000);
+        },
         async refresh() {
             try {
                 const d = await (await fetch('{{ route('ui.tools.status') }}')).json();
                 this.browser = d.browser; this.sandbox = d.sandbox; this.gateway = d.gateway;
                 if (d.gatewayModels) this.gatewayModels = d.gatewayModels;
             } catch (e) {}
+        },
+
+        // ── Benchmark (Settings ▸ Tools ▸ Gateway models ▸ Benchmark) ─────────
+        benchmarkOf(name) { return this.benchmarks[name] || null; },
+        isBenchmarking(name) {
+            const b = this.benchmarkOf(name);
+            return !!b && (b.status === 'queued' || b.status === 'running');
+        },
+        get benchmarkBusy() {
+            return Object.values(this.benchmarks).some(b => b.status === 'queued' || b.status === 'running');
+        },
+        get benchmarkStatusLabel() {
+            const running = Object.values(this.benchmarks).find(b => b.status === 'running');
+            if (running) return 'benchmarking ' + running.model + '… (local models can take 1-2 min per probe)';
+            const queued = Object.values(this.benchmarks).filter(b => b.status === 'queued').length;
+            return queued ? queued + ' model(s) queued to benchmark…' : '';
+        },
+        ratingColors(rating) {
+            return ({
+                strong: { bg: 'rgba(62,207,142,.14)', fg: '#5fdda5', bd: 'rgba(62,207,142,.35)' },
+                usable: { bg: 'rgba(95,180,221,.14)', fg: '#7cc4ea', bd: 'rgba(95,180,221,.35)' },
+                weak: { bg: 'rgba(242,182,97,.14)', fg: '#f5c987', bd: 'rgba(242,182,97,.35)' },
+                broken: { bg: 'rgba(255,107,107,.14)', fg: '#ff9b9b', bd: 'rgba(255,107,107,.35)' },
+            })[rating] || { bg: 'rgba(255,255,255,.04)', fg: '#8a9499', bd: 'rgba(255,255,255,.1)' };
+        },
+        benchmarkLabel(name) {
+            const b = this.benchmarkOf(name);
+            if (!b) return '';
+            if (b.status === 'queued') return 'queued';
+            if (b.status === 'running') return 'probing…';
+            if (b.status === 'failed') return 'failed';
+            if (b.status !== 'done') return '';
+            const ms = b.median_ms == null ? '' : (b.median_ms >= 1000 ? (b.median_ms / 1000).toFixed(1) + 's' : b.median_ms + 'ms');
+            return [String(b.rating || '').toUpperCase(), b.score ?? '?', ms, b.low_confidence ? 'low-conf' : '', this.benchmarkIsStale(name) ? 'STALE' : ''].filter(Boolean).join(' · ');
+        },
+        // §E — age of the measurement, and whether it's past benchmark_ttl_days.
+        // A benchmark is invalidated the instant the model it measured changes
+        // (gatewayCreate/gatewayDelete delete the row outright), but a model left
+        // untouched on the gateway can simply have drifted out of date, which is
+        // what this flags instead.
+        benchmarkAgeDays(name) {
+            const b = this.benchmarkOf(name);
+            if (!b || !b.ran_at) return null;
+            return (Date.now() - new Date(b.ran_at).getTime()) / 86400000;
+        },
+        benchmarkIsStale(name) {
+            const age = this.benchmarkAgeDays(name);
+            return age !== null && age > this.benchmarkTtlDays;
+        },
+        benchmarkAgeLabel(name) {
+            const age = this.benchmarkAgeDays(name);
+            if (age === null) return '';
+            const words = age < 1 ? 'benchmarked today' : 'benchmarked ' + Math.floor(age) + 'd ago';
+            return this.benchmarkIsStale(name) ? words + ' — stale, consider re-running' : words;
+        },
+        // Tooltip: which probe(s) failed and why (a context-only failure is the
+        // num_ctx gateway footgun, not a bad model — the probe's own detail says
+        // so), plus the suggested tier hint and when it was measured.
+        benchmarkTitle(name) {
+            const b = this.benchmarkOf(name);
+            if (!b) return '';
+            if (b.status === 'failed') return 'benchmark failed: ' + (b.error || 'unknown error');
+            const failed = (b.probes || []).filter(p => !p.ok).map(p => p.name + ': ' + p.detail);
+            const lines = failed.length ? failed : ['all probes passed'];
+            if (b.suggested_tier) lines.push('suggested tier: ' + b.suggested_tier);
+            const age = this.benchmarkAgeLabel(name);
+            if (age) lines.push(age);
+            return lines.join('\n');
+        },
+        // ── §B "apply suggested tiers" ──────────────────────────────────────
+        get tierSuggestionRows() {
+            return this.tierSuggestions ? Object.entries(this.tierSuggestions).map(([tier, row]) => ({ tier, ...row })) : [];
+        },
+        get hasTierChanges() {
+            return this.tierSuggestionRows.some(row => !row.unchanged);
+        },
+        async loadTierSuggestions() {
+            if (this.suggestingTiers) return;
+            this.suggestingTiers = true; this.tierApplyMsg = '';
+            try {
+                const d = await (await fetch('{{ route('gateway.benchmark.suggestions') }}')).json();
+                this.tierSuggestions = d.tiers || {};
+            } catch (e) { this.tierApplyMsg = 'request failed'; }
+            finally { this.suggestingTiers = false; }
+        },
+        async applyTierSuggestions() {
+            if (this.applyingTiers || !this.hasTierChanges) return;
+            this.applyingTiers = true; this.tierApplyMsg = '';
+            try {
+                const d = await window.postJson('{{ route('gateway.benchmark.apply') }}', {});
+                if (d.ok && (d.applied || []).length) {
+                    this.tierApplyMsg = 'applied — reloading…';
+                    setTimeout(() => location.reload(), 600);   // Configuration tab reads tier values at page load
+                } else if (d.ok) {
+                    this.tierApplyMsg = 'nothing to apply';
+                    this.tierSuggestions = d.tiers || this.tierSuggestions;
+                } else {
+                    this.tierApplyMsg = 'failed';
+                }
+            } catch (e) { this.tierApplyMsg = 'request failed'; }
+            finally { this.applyingTiers = false; }
+        },
+        async benchmarkAll() {
+            if (this.benchmarkBusy) return;
+            await this.startBenchmark(null);
+        },
+        async benchmarkOne(name) {
+            if (this.isBenchmarking(name)) return;
+            await this.startBenchmark(name);
+        },
+        async startBenchmark(name) {
+            try {
+                const body = { deep: this.benchmarkDeep ? 1 : 0 };
+                if (name) body.model = name;
+                const d = await window.postJson('{{ route('gateway.benchmark.start') }}', body);
+                if (d.rows) this.applyBenchmarkRows(d.rows);
+            } catch (e) {}
+        },
+        async refreshBenchmarks() {
+            try {
+                const d = await (await fetch('{{ route('gateway.benchmark.status') }}')).json();
+                if (d.rows) this.applyBenchmarkRows(d.rows);
+            } catch (e) {}
+        },
+        applyBenchmarkRows(rows) {
+            const wasBusy = this.benchmarkBusy;
+            const map = {};
+            rows.forEach(r => { map[r.model] = r; });
+            this.benchmarks = map;
+
+            // A run just FINISHED. These chips are live, but the Configuration
+            // tab's model dropdowns are not: their option labels ("— 100 strong
+            // · 0.7s") and their "hasn't been benchmarked yet" notices are
+            // rendered by SettingsController on page load, so they keep saying
+            // "not benchmarked" about a model that was measured a minute ago.
+            // Only a reload re-renders them.
+            if (wasBusy && !this.benchmarkBusy) this.ratingsWentStale();
+        },
+
+        // Refresh the server-rendered ratings — but NEVER at the cost of the
+        // operator's unsaved work: the Configuration form keeps its edits in
+        // Alpine state, which a reload would silently discard. With nothing
+        // pending we just reload; otherwise we ask, and they reload when ready.
+        ratingsWentStale() {
+            const settings = (window.Alpine && Alpine.store('settings')) || null;
+            if (settings && settings.dirty) {
+                this.ratingsStale = true;
+
+                return;
+            }
+            location.reload();
         },
 
         // The saved default model is not one the gateway serves, so jobs are

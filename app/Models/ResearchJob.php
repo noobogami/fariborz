@@ -100,6 +100,20 @@ class ResearchJob extends Model
         return $this->role === JobRole::Supervisor;
     }
 
+    /**
+     * Every worker/reviewer sub-agent SYSTEM-WIDE currently occupying a
+     * gateway "slot" (status Running). The LLM gateway is one shared resource
+     * across every project tree, so ResearchOrchestrator::spawnCapacity()
+     * spends GatewayHealth's budget against this GLOBAL count, not just one
+     * supervisor's own children — a struggling gateway must throttle every
+     * supervisor, not only the one whose call happened to be slow.
+     */
+    public function scopeActiveSubAgents($query)
+    {
+        return $query->whereIn('role', [JobRole::Worker, JobRole::Reviewer])
+            ->where('status', JobStatus::Running);
+    }
+
     /** How many levels of supervision are above this job (root = 0). */
     public function depth(): int
     {

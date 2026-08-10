@@ -84,6 +84,60 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Adaptive gateway load control
+    |--------------------------------------------------------------------------
+    | A closed feedback loop on the LLM gateway's own responsiveness (see
+    | Llm\GatewayHealth), controlling how many sub-agents (workers + reviewers)
+    | Fariborz keeps in flight. Classic AIMD — additive increase when the
+    | gateway is fast, multiplicative decrease when it's slow or erroring — so
+    | a struggling gateway isn't handed more load while it's already taking 10
+    | minutes per call and failing, and a recovered one is trusted again a
+    | little at a time rather than all at once. Deterministic, like delegation
+    | and finish: the LLM is never asked "should we slow down".
+    */
+    'gateway_load' => [
+        'enabled' => env('RESEARCH_GATEWAY_LOAD_ADAPT', true),
+        // Always keep making forward progress, even under a dead gateway.
+        'min_concurrency' => env('RESEARCH_GATEWAY_MIN_CONCURRENCY', 1),
+        // Where the budget starts (and resets to after a quiet period).
+        'base_concurrency' => env('RESEARCH_GATEWAY_BASE_CONCURRENCY', 3),
+        'max_concurrency' => env('RESEARCH_GATEWAY_MAX_CONCURRENCY', 6),
+        // Below this average, and error-free, the gateway is "fast" → +1.
+        'fast_ms' => env('RESEARCH_GATEWAY_FAST_MS', 20000),
+        // At/above this average, the gateway is "slow" → halve the budget. When
+        // the window's models have benchmark data (Settings ▸ Tools ▸ Gateway
+        // models ▸ Benchmark), the REAL bar used is whichever is higher of this
+        // and slow_factor × the models' benchmarked median latency — see
+        // GatewayHealth::slowThreshold. Without benchmark data this is used as-is.
+        'slow_ms' => env('RESEARCH_GATEWAY_SLOW_MS', 75000),
+        // How far above a model's own benchmarked median latency counts as
+        // "slow" for THAT model, instead of the one fixed slow_ms above. E.g. a
+        // model normally 90s isn't "slow" until it's 2.5× that (225s) — so a
+        // model that is just inherently a slow model doesn't permanently pin the
+        // concurrency budget at 1.
+        'slow_factor' => env('RESEARCH_GATEWAY_SLOW_FACTOR', 2.5),
+        // Error share of the window at/above which the gateway is "degraded"
+        // (halve the budget) regardless of latency.
+        'error_rate_slow' => env('RESEARCH_GATEWAY_ERROR_RATE', 0.34),
+        // Rolling window of the last N calls the state is judged over.
+        'window' => env('RESEARCH_GATEWAY_WINDOW', 20),
+        // Below this many samples there isn't enough signal yet — "unknown",
+        // budget held at base_concurrency.
+        'min_samples' => env('RESEARCH_GATEWAY_MIN_SAMPLES', 3),
+        // Re-evaluate the budget at most this often, so one stray fast/slow
+        // call can't whipsaw the limit turn to turn.
+        'adjust_interval_seconds' => env('RESEARCH_GATEWAY_ADJUST_INTERVAL', 20),
+        // No calls for this long → reset to base_concurrency. A fresh start
+        // after a quiet period must not inherit yesterday's punishment.
+        'idle_reset_seconds' => env('RESEARCH_GATEWAY_IDLE_RESET', 600),
+        // While the gateway is strained, OpenAiCompatibleClient drops its
+        // client-side retry count to 1 instead of 3 — retrying a struggling
+        // gateway just triples the load that's already hurting it.
+        'adaptive_retries' => env('RESEARCH_GATEWAY_ADAPTIVE_RETRIES', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Retries / backoff for tool execution
     |--------------------------------------------------------------------------
     */
@@ -116,6 +170,11 @@ return [
         // planner turn; 0 disables caching. Adding/removing a model in the UI busts
         // it immediately regardless.
         'catalog_ttl' => env('RESEARCH_LLM_CATALOG_TTL', 30),
+        // A model_benchmarks row older than this is flagged STALE in the Settings
+        // dropdowns and the Tools benchmark chips — the underlying model/gateway
+        // config may well have moved on since it was measured. Purely a UI hint;
+        // nothing here re-runs or discards the row automatically.
+        'benchmark_ttl_days' => env('RESEARCH_LLM_BENCHMARK_TTL_DAYS', 14),
         'max_tokens' => env('RESEARCH_LLM_MAX_TOKENS', 4096),
         'temperature' => env('RESEARCH_LLM_TEMPERATURE', 0.2),
         // Keep at most this many transcript messages verbatim; older ones get summarized.

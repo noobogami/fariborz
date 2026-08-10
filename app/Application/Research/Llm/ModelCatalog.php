@@ -2,6 +2,7 @@
 
 namespace App\Application\Research\Llm;
 
+use App\Models\ModelBenchmark;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -188,7 +189,37 @@ class ModelCatalog
             }
         }
 
-        return $names[0];
+        // Last resort: nothing the operator configured survived, so prefer a
+        // PROVEN model over whichever one happened to be listed first — see the
+        // benchmark-wiring spec §D. Falls back to $names[0] unchanged when
+        // nothing has been benchmarked, so this is a pure enhancement.
+        return $this->bestRated($names) ?? $names[0];
+    }
+
+    /**
+     * The highest-scored model among $names that isn't rated `broken`. Iterates
+     * in $names order so a score tie always resolves to the same model
+     * regardless of row insertion order in the DB. Null when nothing is rated —
+     * the caller's own $names[0] fallback then applies unchanged.
+     *
+     * @param  list<string>  $names
+     */
+    private function bestRated(array $names): ?string
+    {
+        $rated = ModelBenchmark::ratedBy($names);
+
+        $best = null;
+        foreach ($names as $name) {
+            $row = $rated->get($name);
+            if ($row === null || $row->rating === 'broken' || $row->score === null) {
+                continue;
+            }
+            if ($best === null || (int) $row->score > (int) $best->score) {
+                $best = $row;
+            }
+        }
+
+        return $best?->model;
     }
 
     /**

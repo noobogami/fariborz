@@ -44,6 +44,11 @@
                 'stale' => $f['stale'] ?? '',
                 'numeric' => in_array($f['type'], ['int', 'float'], true),
                 'options' => $f['options'] ?? [],
+                // model name -> "name — score rating · latency" (or "— not
+                // benchmarked") — see SettingsController::withModelDropdowns.
+                // Only gateway-model fields carry this; every other select's
+                // options render as plain text (see the option x-text below).
+                'optionLabels' => $f['option_labels'] ?? [],
                 'value' => $type === 'bool' ? (bool) $val : ($secret ? '' : ($val ?? '')),
                 'isSet' => $secret ? (bool) $val : false,
                 'state' => in_array($key, $overridden, true) ? 'override' : 'default',
@@ -195,7 +200,7 @@
                                                     :style="{ border: '1px solid '+(f.edited?'rgba(242,182,97,.4)':'rgba(255,255,255,.1)'), color: f.edited?'#f7e2c2':'#e4e9ea' }">
                                                 <template x-for="o in f.options" :key="o">
                                                     <option :value="o" :selected="String($store.settings.cur(f)) === String(o)"
-                                                            x-text="o==='' ? f.blankLabel : (o===f.stale ? o + '  ·  not on gateway' : o)"
+                                                            x-text="o==='' ? f.blankLabel : (o===f.stale ? o + '  ·  not on gateway' : (f.optionLabels[o] || o))"
                                                             style="background:#101416;color:#e4e9ea"></option>
                                                 </template>
                                             </select>

@@ -4,6 +4,7 @@ namespace App\Application\Research;
 
 use App\Application\Research\Guardrails\GuardrailPipeline;
 use App\Application\Research\Human\HumanAvailabilityService;
+use App\Application\Research\Llm\GatewayHealth;
 use App\Application\Research\Llm\ModelAvailability;
 use App\Application\Research\Planner\FailureDiagnosis;
 use App\Application\Research\Planner\GoalComprehension;
@@ -19,6 +20,7 @@ use App\Domain\Research\Contracts\ResearchJobRepository;
 use App\Domain\Research\Contracts\TraceRecorder;
 use App\Domain\Research\Enums\EventType;
 use App\Domain\Research\Enums\JobRole;
+use App\Domain\Research\Enums\JobStatus;
 use App\Domain\Research\Enums\StepType;
 use App\Domain\Research\Enums\TaskStatus;
 use App\Domain\Research\ValueObjects\FinishDecision;
@@ -63,6 +65,7 @@ class ResearchOrchestrator
         private ModelRouter $router,
         private FailureDiagnosis $diagnosis,
         private ArtifactChecks $artifactChecks,
+        private GatewayHealth $health,
     ) {}
 
     public function advance(string $jobId): void
@@ -102,15 +105,37 @@ class ResearchOrchestrator
         //     bounded steps it's good at: plan, review ONE task, or assemble/finish.
         //     This is what killed the delegate→blocked→delegate thrash loop.
         if ($job->isSupervisor()) {
-            if ($this->autoDelegateReadyTasks($job) > 0) {
+            // GATEWAY LOAD CONTROL: how many NEW sub-agents this pass may start,
+            // computed once and spent across BOTH deterministic passes below
+            // (delegation first, then reviews get whatever capacity is left).
+            $capacity = $this->spawnCapacity($job);
+
+            $delegation = $this->autoDelegateReadyTasks($job, $capacity);
+            if ($delegation['spawned'] > 0) {
                 $context = $this->buildContext($job);   // ready tasks are now running
             }
             // Every task AWAITING REVIEW is dispatched deterministically too: a
             // pre-gate that can only reject, otherwise a per-task Reviewer agent
             // (or, if reviewing is disabled, left for the LLM fallback below).
-            if ($this->autoDispatchReviews($job) > 0) {
+            $review = $this->autoDispatchReviews($job, max(0, $capacity - $delegation['spawned']));
+            if ($review['spawned'] > 0) {
                 $context = $this->buildContext($job);
             }
+
+            // Something was READY but held back for gateway load — park with NO
+            // model call spent. This is safe only because spawnCapacity() never
+            // returns less than 1 for a supervisor with nothing of its own in
+            // flight (see its docblock) — otherwise a supervisor whose entire
+            // budget got deferred would have no live child left to wake it via
+            // ResumeSupervisorOnChildDone, and it would park forever.
+            $deferred = $delegation['deferred'] + $review['deferred'];
+            if ($deferred > 0) {
+                $this->recordThrottled($job, $deferred);
+                $this->jobs->setActivity($job, 'awaiting_worker');
+
+                return;
+            }
+
             if ($job->supervisorShouldWait()) {
                 $this->jobs->setActivity($job, 'awaiting_worker');   // wait for workers — no LLM call, no loop
 
@@ -129,6 +154,13 @@ class ResearchOrchestrator
 
                 return;
             }
+        }
+
+        // A STOP can land anywhere inside this iteration — the deterministic passes
+        // above spawn sub-agents and can take a while. Never spend a model call on a
+        // job that's already stopped, and don't reschedule: the cancel is final.
+        if (! $this->stillRunnable($job)) {
+            return;
         }
 
         // 2. Ask the brain for the single next action.
@@ -453,16 +485,111 @@ class ResearchOrchestrator
      * start (independents in parallel), and the supervisor never has to "decide" to
      * delegate. Returns how many were started.
      */
-    private function autoDelegateReadyTasks(ResearchJob $job): int
+    /**
+     * Is the job STILL running, as of right now in the DB?
+     *
+     * `advance()` checks runnability once at the top, but a deterministic pass can
+     * put several tasks in flight over many seconds, and a STOP that lands in that
+     * window would be silently undone: CancelResearch resets the supervisor's
+     * in-flight tasks to Pending, and a pass already past its own preflight would
+     * re-delegate them — spawning sub-agents that immediately die on the
+     * cancellation guardrail and leaving the tasks stuck reading "in progress"
+     * under a stopped job. Cheap re-read (one column) between spawns closes it.
+     */
+    private function stillRunnable(ResearchJob $job): bool
+    {
+        $status = ResearchJob::whereKey($job->id)->value('status');   // cast to JobStatus by the model
+
+        return ($status instanceof JobStatus ? $status : JobStatus::tryFrom((string) $status))?->isRunnable() === true;
+    }
+
+    /**
+     * How many NEW sub-agents (workers + reviewers) THIS supervisor may start
+     * right now — the enforcement side of GatewayHealth's AIMD budget (see its
+     * docblock for the state machine). Disabled (research.gateway_load.enabled
+     * = false) is unlimited, i.e. today's behaviour.
+     *
+     * The gateway is a resource shared by every project tree, so the budget is
+     * spent against the GLOBAL count of running workers/reviewers
+     * (ResearchJob::scopeActiveSubAgents), not just this job's own children —
+     * one struggling gateway must throttle every supervisor, not only the one
+     * whose call happened to be slow.
+     *
+     * PER-SUPERVISOR FLOOR — load-bearing, read twice: if THIS job has NO live
+     * sub-agent of its own (no task InProgress/Reviewing with a still-running
+     * child), the floor is 1, even when the global budget is already fully
+     * spent by another project. A parked supervisor is woken ONLY by one of
+     * its OWN children finishing (ResumeSupervisorOnChildDone::handle*) — if
+     * the global budget were allowed to starve a supervisor down to zero
+     * children, nothing would ever wake it again and it would deadlock
+     * forever. Giving it at least 1 guarantees it always has something in
+     * flight to be woken by.
+     */
+    private function spawnCapacity(ResearchJob $job): int
+    {
+        if (! config('research.gateway_load.enabled', true)) {
+            return PHP_INT_MAX;
+        }
+
+        $limit = $this->health->concurrencyLimit();
+        $global = ResearchJob::activeSubAgents()->count();
+        $capacity = max(0, $limit - $global);
+
+        if ($capacity < 1 && ! $this->hasLiveChild($job)) {
+            return 1;
+        }
+
+        return $capacity;
+    }
+
+    /** Does THIS supervisor have a sub-agent of its own actually still running? */
+    private function hasLiveChild(ResearchJob $job): bool
+    {
+        $childIds = $job->tasks()
+            ->whereIn('status', [TaskStatus::InProgress, TaskStatus::Reviewing])
+            ->whereNotNull('child_job_id')
+            ->pluck('child_job_id');
+
+        return $childIds->isNotEmpty()
+            && ResearchJob::whereIn('id', $childIds)->where('status', JobStatus::Running)->exists();
+    }
+
+    /**
+     * ONE trace event for a whole pass that deferred spawns — never one per
+     * task, which would spam the timeline every turn the gateway is under
+     * load. Carries the GatewayHealth snapshot so a human can see WHY.
+     */
+    private function recordThrottled(ResearchJob $job, int $deferred): void
+    {
+        $snap = $this->health->snapshot();
+        $avgSeconds = round($snap['avg_ms'] / 1000, 1);
+        $errors = (int) round($snap['error_rate'] * $snap['samples']);
+
+        $this->trace->record($job, EventType::GuardrailTriggered,
+            "Gateway is {$snap['state']} (avg {$avgSeconds}s, {$errors} error(s) in last {$snap['samples']} call(s)) — "
+            ."holding {$deferred} ready item(s); concurrency limit is {$snap['limit']}.",
+            ['state' => $snap['state'], 'avg_ms' => $snap['avg_ms'], 'limit' => $snap['limit'], 'deferred' => $deferred]);
+    }
+
+    /**
+     * @return array{spawned:int, deferred:int}
+     */
+    private function autoDelegateReadyTasks(ResearchJob $job, int $capacity): array
     {
         $tasks = $job->tasks()->get();
         $done = $tasks->where('status', TaskStatus::Done)->pluck('seq')->map(fn ($s) => (int) $s)->all();
         $cap = (int) config('research.supervisor.max_task_attempts', 3);
         $spawned = 0;
+        $deferred = 0;
 
         foreach ($tasks as $task) {
             if ($task->status !== TaskStatus::Pending || ! $task->isReady($done)) {
                 continue;
+            }
+
+            // A STOP that lands mid-pass must not be undone by the rest of it.
+            if (! $this->stillRunnable($job)) {
+                break;
             }
 
             // DETERMINISTIC LOOP-BREAK: a weak worker can produce output the
@@ -498,6 +625,17 @@ class ResearchOrchestrator
                 continue;
             }
 
+            // GATEWAY LOAD CONTROL: this pass has spent its spawn budget — leave
+            // the rest ready-but-Pending rather than starting more sub-agents.
+            // They are picked up on a later pass (a finishing sub-agent frees a
+            // slot and wakes the supervisor, or the budget grows again once the
+            // gateway is fast). Never abandoned, only delayed.
+            if ($spawned >= $capacity) {
+                $deferred++;
+
+                continue;
+            }
+
             // Decide how THIS (re)assignment should be shaped before spawning:
             // route around an unavailable model, and — for a non-availability
             // failure — diagnose a corrective guideline for the fresh worker.
@@ -517,7 +655,7 @@ class ResearchOrchestrator
             $spawned++;
         }
 
-        return $spawned;
+        return ['spawned' => $spawned, 'deferred' => $deferred];
     }
 
     /**
@@ -542,21 +680,31 @@ class ResearchOrchestrator
      * autoDelegateReadyTasks above) — so a task gets N total tries across BOTH
      * worker failures and review revisions, exactly like before this change.
      *
-     * Returns how many tasks were moved out of AwaitingReview this turn, so the
-     * caller knows whether to rebuild context before proceeding.
+     * Returns how many tasks were SPAWNED (moved to Reviewing) this turn, so
+     * the caller knows whether to rebuild context before proceeding, plus how
+     * many passed the pre-gate but were held back for gateway load (still
+     * AwaitingReview, tried again next pass).
+     *
+     * @return array{spawned:int, deferred:int}
      */
-    private function autoDispatchReviews(ResearchJob $job): int
+    private function autoDispatchReviews(ResearchJob $job, int $capacity): array
     {
         $tasks = $job->tasks()->where('status', TaskStatus::AwaitingReview)->get();
         if ($tasks->isEmpty()) {
-            return 0;
+            return ['spawned' => 0, 'deferred' => 0];
         }
 
         $reviewerEnabled = (bool) config('research.supervisor.reviewer_enabled', true);
         $workspace = $this->workspaceIdFor($job);
-        $moved = 0;
+        $spawned = 0;
+        $deferred = 0;
 
         foreach ($tasks as $task) {
+            // Same as delegation: a STOP mid-pass must not put tasks back in flight.
+            if (! $this->stillRunnable($job)) {
+                break;
+            }
+
             $check = $this->artifactChecks->verifyOutputs($workspace, $task);
 
             if ($check['problems']) {
@@ -568,13 +716,21 @@ class ResearchOrchestrator
                     "Pre-gate rejected task #{$task->seq} \"{$task->title}\" — a declared output is "
                     .'missing or empty; sent straight back to revise (no reviewer spawned).',
                     ['task' => $task->seq, 'problems' => $check['problems']]);
-                $moved++;
 
-                continue;
+                continue;   // a rejection isn't a spawn — never gateway-load-gated
             }
 
             if (! $reviewerEnabled) {
                 continue;   // leave AwaitingReview — the supervisor's own review_task judges it
+            }
+
+            // GATEWAY LOAD CONTROL: same budget as delegation, spent further by
+            // this pass. A deferred review simply stays AwaitingReview — tried
+            // again next pass, not lost.
+            if ($spawned >= $capacity) {
+                $deferred++;
+
+                continue;
             }
 
             // Route the reviewer around a throttled model too — mirror routeRetry
@@ -599,10 +755,10 @@ class ResearchOrchestrator
                 "Task #{$task->seq} \"{$task->title}\" passed the deterministic pre-gate — spawned a "
                 .'Reviewer agent to judge it.',
                 ['task' => $task->seq, 'reviewer_id' => $reviewer->id, 'verified' => $check['verified']]);
-            $moved++;
+            $spawned++;
         }
 
-        return $moved;
+        return ['spawned' => $spawned, 'deferred' => $deferred];
     }
 
     /**

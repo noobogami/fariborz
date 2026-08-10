@@ -37,9 +37,11 @@ class StartResearch
         $job = $this->jobs->create($goal, $config, $role);
         $this->memory->seedGoal($job);
 
+        // The summary is CLIPPED for the timeline, so the verbatim prompt is kept in
+        // the payload under `goal` — that's what the UI shows as "the full prompt".
         $this->trace->record($job, EventType::JobStarted,
             ($role === JobRole::Supervisor ? 'Supervised project started for goal: ' : 'Research started for goal: ').$goal,
-            ['config' => $config, 'role' => $role->value]);
+            ['goal' => $goal, 'config' => $config, 'role' => $role->value]);
 
         AdvanceResearchJob::dispatch($job->id)->onQueue(config('research.queue.name'));
 
@@ -114,7 +116,7 @@ class StartResearch
         };
         $this->trace->record($child, EventType::JobStarted,
             $label.$task->seq.": {$task->title}",
-            ['task_id' => $task->id, 'parent_job_id' => $parent->id, 'role' => $role->value]);
+            ['goal' => $goal, 'task_id' => $task->id, 'parent_job_id' => $parent->id, 'role' => $role->value]);
 
         AdvanceResearchJob::dispatch($child->id)->onQueue(config('research.queue.name'));
 

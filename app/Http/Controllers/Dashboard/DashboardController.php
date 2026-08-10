@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Dashboard;
 
 use App\Application\Research\CancelResearch;
 use App\Application\Research\ContinueResearch;
+use App\Application\Research\Llm\GatewayHealth;
 use App\Application\Research\Llm\ModelCatalog;
 use App\Application\Research\StartResearch;
 use App\Application\Research\Tracing\ResearchTraceReader;
@@ -25,12 +26,19 @@ class DashboardController extends Controller
     public function __construct(
         private ResearchJobRepository $jobs,
         private ModelCatalog $catalog,
+        private GatewayHealth $health,
     ) {}
 
     /** Jobs list + new-job form. */
     public function index()
     {
-        return view('dashboard.index', ['jobs' => collect($this->jobsPayload())]);
+        return view('dashboard.index', [
+            'jobs' => collect($this->jobsPayload()),
+            // Small "is the gateway keeping up" badge — the same signal the
+            // orchestrator uses to throttle sub-agent spawns (spawnCapacity),
+            // just surfaced for a human instead of enforced.
+            'gateway' => $this->health->snapshot(),
+        ]);
     }
 
     /**
@@ -72,8 +80,14 @@ class DashboardController extends Controller
 
             if ($j->role === JobRole::Supervisor) {
                 $tasks = $tasksByJob->get($j->id, collect());
-                $row['tasks'] = $tasks->map(fn (ResearchTask $t) => ['seq' => $t->seq, 'status' => $t->status->value])->values()->all();
-                $row['children'] = $childrenByParent->get($j->id, collect())->map(function (ResearchJob $w) use ($tasks) {
+                $children = $childrenByParent->get($j->id, collect());
+                $childStatus = $children->mapWithKeys(fn (ResearchJob $w) => [$w->id => $w->status->value]);
+
+                $row['tasks'] = $tasks->map(fn (ResearchTask $t) => [
+                    'seq' => $t->seq,
+                    'status' => $t->displayStatus($j, $childStatus->get($t->child_job_id)),
+                ])->values()->all();
+                $row['children'] = $children->map(function (ResearchJob $w) use ($tasks) {
                     $task = $tasks->firstWhere('child_job_id', $w->id);
 
                     return [
@@ -354,27 +368,38 @@ class DashboardController extends Controller
 
         if ($role === 'supervisor') {
             $tasks = $job->tasks()->get();
-            $out['tasks'] = $tasks->map(fn (ResearchTask $t) => [
+            $children = $job->children()->latest('created_at')->get();
+            // Sub-agent status per task holder, so a task whose worker was stopped
+            // isn't shown as still running — see ResearchTask::displayStatus().
+            $childStatus = $children->mapWithKeys(fn (ResearchJob $w) => [$w->id => $w->status->value]);
+
+            $shown = $tasks->map(fn (ResearchTask $t) => $t->displayStatus($job, $childStatus->get($t->child_job_id)));
+
+            $out['tasks'] = $tasks->values()->map(fn (ResearchTask $t, int $i) => [
                 'seq' => $t->seq,
                 'title' => $t->title,
                 'brief' => $t->brief,
-                'status' => $t->status->value,               // pending|in_progress|awaiting_review|done|failed
+                // pending|in_progress|awaiting_review|reviewing|done|failed, or the
+                // display-only `stopped` for an in-flight row nothing is working on.
+                'status' => $shown[$i],
                 'attempts' => (int) $t->attempts,
                 'worker' => $t->child_job_id,
                 'result' => $t->result,
                 'at' => optional($t->updated_at)->format('H:i'),
             ])->all();
 
+            // Counted off the SHOWN status so the plan summary agrees with the rows.
             $out['task_counts'] = [
                 'total' => $tasks->count(),
-                'done' => $tasks->where('status', TaskStatus::Done)->count(),
-                'failed' => $tasks->where('status', TaskStatus::Failed)->count(),
-                'in_progress' => $tasks->where('status', TaskStatus::InProgress)->count(),
-                'awaiting_review' => $tasks->where('status', TaskStatus::AwaitingReview)->count(),
-                'reviewing' => $tasks->where('status', TaskStatus::Reviewing)->count(),
+                'done' => $shown->filter(fn ($s) => $s === TaskStatus::Done->value)->count(),
+                'failed' => $shown->filter(fn ($s) => $s === TaskStatus::Failed->value)->count(),
+                'in_progress' => $shown->filter(fn ($s) => $s === TaskStatus::InProgress->value)->count(),
+                'awaiting_review' => $shown->filter(fn ($s) => $s === TaskStatus::AwaitingReview->value)->count(),
+                'reviewing' => $shown->filter(fn ($s) => $s === TaskStatus::Reviewing->value)->count(),
+                'stopped' => $shown->filter(fn ($s) => $s === ResearchTask::DISPLAY_STOPPED)->count(),
             ];
 
-            $out['workers'] = $job->children()->latest('created_at')->get()->map(function (ResearchJob $w) use ($tasks) {
+            $out['workers'] = $children->map(function (ResearchJob $w) use ($tasks) {
                 $task = $tasks->firstWhere('child_job_id', $w->id);
 
                 return [

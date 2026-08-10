@@ -40,6 +40,10 @@ Route::delete('/tools/skills/{id}', [ToolsController::class, 'deleteSkill'])->na
 Route::post('/tools/gateway/models', [ToolsController::class, 'gatewayCreate'])->name('gateway.models.create');
 Route::post('/tools/gateway/models/remove', [ToolsController::class, 'gatewayDelete'])->name('gateway.models.delete');
 Route::post('/tools/gateway/health', [ToolsController::class, 'gatewayHealth'])->name('gateway.health');
+Route::post('/tools/gateway/benchmark', [ToolsController::class, 'benchmarkStart'])->name('gateway.benchmark.start');
+Route::get('/tools/gateway/benchmark', [ToolsController::class, 'benchmarkStatus'])->name('gateway.benchmark.status');
+Route::get('/tools/gateway/benchmark/suggestions', [ToolsController::class, 'benchmarkSuggestions'])->name('gateway.benchmark.suggestions');
+Route::post('/tools/gateway/benchmark/apply', [ToolsController::class, 'benchmarkApply'])->name('gateway.benchmark.apply');
 
 // ── JSON endpoints used by the UI for live polling ───────────────────────────
 Route::prefix('ui/api')->group(function () {

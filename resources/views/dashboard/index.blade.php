@@ -9,10 +9,27 @@
 @endphp
 
 @section('header')
+@php
+    // Small "is the gateway keeping up" badge — the same GatewayHealth signal
+    // the orchestrator uses to throttle new sub-agent spawns (spawnCapacity),
+    // just surfaced here for a human instead of enforced.
+    $gwState = $gateway['state'] ?? 'unknown';
+    $gwTone = match ($gwState) {
+        'fast' => ['bg' => 'rgba(62,207,142,.12)', 'fg' => '#5fdda5', 'bd' => 'rgba(62,207,142,.3)'],
+        'slow' => ['bg' => 'rgba(242,182,97,.14)', 'fg' => '#f5c987', 'bd' => 'rgba(242,182,97,.35)'],
+        'degraded' => ['bg' => 'rgba(255,107,107,.13)', 'fg' => '#ff9b9b', 'bd' => 'rgba(255,107,107,.32)'],
+        default => ['bg' => 'rgba(255,255,255,.06)', 'fg' => '#a3adb1', 'bd' => 'rgba(255,255,255,.12)'],
+    };
+    $gwAvg = ($gateway['avg_ms'] ?? 0) > 0 ? round($gateway['avg_ms'] / 1000, 1).'s avg' : '— avg';
+@endphp
 <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;width:100%">
     <div>
         <h1 style="margin:0;font-size:19px;font-weight:600;letter-spacing:-.012em;color:#f2f5f6">Research Jobs</h1>
         <div class="fz-mono" style="font-size:10.5px;color:#8a9499;margin-top:4px">{{ $cActive }} active · {{ $cSup }} supervised · {{ $cDone }} completed · {{ $cFailed }} failed</div>
+    </div>
+    <div class="fz-mono" title="Adaptive gateway load control — holds back new sub-agents when the LLM gateway is slow or erroring"
+         style="margin-left:auto;font-size:10px;letter-spacing:.06em;padding:5px 11px;border-radius:20px;background:{{ $gwTone['bg'] }};color:{{ $gwTone['fg'] }};border:1px solid {{ $gwTone['bd'] }}">
+        Gateway · {{ $gwState }} · {{ $gwAvg }} · limit {{ $gateway['limit'] ?? '—' }}
     </div>
 </div>
 @endsection
@@ -211,7 +228,9 @@ function jobsList() {
         cancelled: { bg:'rgba(255,255,255,.06)', fg:'#a3adb1', bd:'rgba(255,255,255,.12)', anim:'none', row:'transparent' },
     };
     const fallback = { bg:'rgba(255,255,255,.06)', fg:'#a3adb1', bd:'rgba(255,255,255,.12)', anim:'none', row:'transparent' };
-    const TASK_SEG = { pending:'rgba(255,255,255,.12)', in_progress:'#ea638c', awaiting_review:'#f2b661', reviewing:'#a87ff9', done:'#3ecf8e', failed:'#ff6b6b' };
+    const TASK_SEG = { pending:'rgba(255,255,255,.12)', in_progress:'#ea638c', awaiting_review:'#f2b661', reviewing:'#a87ff9', done:'#3ecf8e', failed:'#ff6b6b',
+                       // display-only: in-flight row whose job/worker is over (see ResearchTask::displayStatus)
+                       stopped:'rgba(255,255,255,.22)' };
     return {
         jobs: @json($jobs),
         tab: 'ALL',

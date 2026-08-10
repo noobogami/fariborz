@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Settings\SettingsService;
+use App\Models\ModelBenchmark;
 use App\Models\Setting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -68,6 +69,11 @@ class SettingsTest extends TestCase
     public function test_model_fields_become_a_dropdown_of_the_gateways_live_models(): void
     {
         $this->served = ['local-standard', 'gpt-4o', 'claude'];
+        // This test is about dropdown MECHANICS, not benchmark notices (those have
+        // their own tests below) — pin the current value blank so the ambient
+        // .env default (RESEARCH_LLM_MODEL=local-standard, unbenchmarked in a
+        // fresh test DB) can't sneak a "not benchmarked" notice in here.
+        config(['research.llm.model' => '']);
 
         $default = $this->modelFields()['research.llm.model'];
 
@@ -181,5 +187,68 @@ class SettingsTest extends TestCase
 
         // Registry is rebuilt per resolution → the tool is now available.
         $this->assertTrue(app(ToolRegistry::class)->has('tavily_search'));
+    }
+
+    // ── §A — model dropdowns show benchmark evidence right where a model is chosen ──
+
+    public function test_a_dropdown_option_shows_score_rating_and_latency(): void
+    {
+        $this->served = ['qwen3-normal', 'qwen3-thinking'];
+        ModelBenchmark::create(['model' => 'qwen3-normal', 'status' => 'done', 'score' => 100, 'rating' => 'strong', 'median_ms' => 1477]);
+
+        $default = $this->modelFields()['research.llm.model'];
+
+        $this->assertSame('qwen3-normal — 100 strong · 1.5s', $default['optionLabels']['qwen3-normal']);
+        $this->assertSame('qwen3-thinking — not benchmarked', $default['optionLabels']['qwen3-thinking']);
+    }
+
+    public function test_a_broken_current_value_gets_a_warning_notice(): void
+    {
+        $this->served = ['qwen3-broken'];
+        config(['research.llm.model' => 'qwen3-broken']);
+        ModelBenchmark::create(['model' => 'qwen3-broken', 'status' => 'done', 'score' => 90, 'rating' => 'broken']);
+
+        $default = $this->modelFields()['research.llm.model'];
+
+        $this->assertStringContainsString('is rated broken', $default['notice']);
+        $this->assertStringContainsString('routed to another model', $default['notice']);
+    }
+
+    public function test_an_unbenchmarked_current_value_gets_a_not_benchmarked_notice(): void
+    {
+        $this->served = ['qwen3-normal'];
+        config(['research.llm.model' => 'qwen3-normal']);
+
+        $default = $this->modelFields()['research.llm.model'];
+
+        $this->assertStringContainsString("hasn't been benchmarked yet", $default['notice']);
+    }
+
+    public function test_a_stale_benchmark_says_when_it_was_measured(): void
+    {
+        $this->served = ['qwen3-normal'];
+        config(['research.llm.model' => 'qwen3-normal', 'research.llm.benchmark_ttl_days' => 14]);
+        ModelBenchmark::create([
+            'model' => 'qwen3-normal', 'status' => 'done', 'score' => 90, 'rating' => 'strong',
+            'ran_at' => now()->subDays(20),
+        ]);
+
+        $default = $this->modelFields()['research.llm.model'];
+
+        $this->assertStringContainsString('was last benchmarked', $default['notice']);
+    }
+
+    public function test_a_fresh_benchmark_on_a_live_model_carries_no_notice(): void
+    {
+        $this->served = ['qwen3-normal'];
+        config(['research.llm.model' => 'qwen3-normal', 'research.llm.benchmark_ttl_days' => 14]);
+        ModelBenchmark::create([
+            'model' => 'qwen3-normal', 'status' => 'done', 'score' => 90, 'rating' => 'strong',
+            'ran_at' => now()->subDays(1),
+        ]);
+
+        $default = $this->modelFields()['research.llm.model'];
+
+        $this->assertSame('', $default['notice']);
     }
 }

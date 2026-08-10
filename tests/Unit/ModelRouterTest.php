@@ -3,13 +3,17 @@
 namespace Tests\Unit;
 
 use App\Application\Research\Planner\ModelRouter;
+use App\Models\ModelBenchmark;
 use App\Models\ResearchJob;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class ModelRouterTest extends TestCase
 {
+    use RefreshDatabase;
+
     /** Model names the fake gateway serves; null = catalogue unreadable. */
     private ?array $served = null;
 
@@ -124,5 +128,62 @@ class ModelRouterTest extends TestCase
         $this->gatewayServes();
 
         $this->assertNull($this->router()->apply($this->job('standard')));
+    }
+
+    // ── §C — a `broken` model must never be routed to (fail-open) ──────────────
+
+    public function test_a_tier_pointing_at_a_broken_model_routes_to_the_best_rated_live_model_instead(): void
+    {
+        $this->gatewayServes('strong-model', 'cheap-model', 'other-model');
+        ModelBenchmark::create(['model' => 'strong-model', 'status' => 'done', 'score' => 90, 'rating' => 'broken']);
+        ModelBenchmark::create(['model' => 'cheap-model', 'status' => 'done', 'score' => 40, 'rating' => 'weak']);
+        ModelBenchmark::create(['model' => 'other-model', 'status' => 'done', 'score' => 85, 'rating' => 'strong']);
+
+        // "strong-model" is what the hard tier is configured to — its NAME suggests
+        // it's good, but the benchmark says it can't even produce a valid tool
+        // call. "other-model" is the best live candidate that isn't broken.
+        $this->assertSame('other-model', $this->router()->apply($this->job('hard')));
+        $this->assertSame('other-model', config('research.llm.model'));
+    }
+
+    public function test_a_tier_pointing_at_a_weak_or_low_scoring_model_is_never_rerouted(): void
+    {
+        $this->gatewayServes('strong-model', 'cheap-model', 'other-model');
+        ModelBenchmark::create(['model' => 'strong-model', 'status' => 'done', 'score' => 5, 'rating' => 'weak']);
+        ModelBenchmark::create(['model' => 'other-model', 'status' => 'done', 'score' => 99, 'rating' => 'strong']);
+
+        // A low score or a "weak" rating is the operator's own choice to keep or
+        // change — only "broken" ever overrides it. A much better candidate
+        // existing must NOT matter here.
+        $this->assertSame('strong-model', $this->router()->apply($this->job('hard')));
+    }
+
+    public function test_no_benchmark_data_at_all_behaves_exactly_as_before_benchmarking_existed(): void
+    {
+        $this->gatewayServes('base-model', 'cheap-model', 'strong-model');
+
+        $this->assertSame('strong-model', $this->router()->apply($this->job('hard')));
+    }
+
+    public function test_every_candidate_broken_keeps_the_configured_model_best_effort(): void
+    {
+        $this->gatewayServes('strong-model', 'cheap-model', 'base-model');
+        ModelBenchmark::create(['model' => 'strong-model', 'status' => 'done', 'score' => 90, 'rating' => 'broken']);
+        ModelBenchmark::create(['model' => 'cheap-model', 'status' => 'done', 'score' => 80, 'rating' => 'broken']);
+        ModelBenchmark::create(['model' => 'base-model', 'status' => 'done', 'score' => 70, 'rating' => 'broken']);
+
+        // Nothing else is any better — hand back the configured model rather than
+        // crash or return an empty string.
+        $this->assertSame('strong-model', $this->router()->apply($this->job('hard')));
+    }
+
+    public function test_a_broken_model_with_an_unreadable_catalogue_is_left_alone(): void
+    {
+        // No gatewayServes() call — the setUp fake keeps the catalogue unreachable.
+        ModelBenchmark::create(['model' => 'strong-model', 'status' => 'done', 'score' => 90, 'rating' => 'broken']);
+
+        // We know it's broken but can't confirm anything else is even live, so
+        // rewriting the operator's config would be a guess, not a fact.
+        $this->assertSame('strong-model', $this->router()->apply($this->job('hard')));
     }
 }

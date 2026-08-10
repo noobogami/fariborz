@@ -9,6 +9,7 @@ use App\Application\Research\Guardrails\MaxIterationsGuardrail;
 use App\Application\Research\Guardrails\MaxToolCallsGuardrail;
 use App\Application\Research\Guardrails\RepeatedFailureGuardrail;
 use App\Application\Research\Guardrails\TimeoutGuardrail;
+use App\Application\Research\Llm\GatewayHealth;
 use App\Application\Research\Planner\LlmPlanner;
 use App\Application\Research\Tools\ToolRegistry;
 use App\Application\Research\Tracing\DbTraceRecorder;
@@ -25,6 +26,7 @@ use App\Events\HumanAvailabilityChanged;
 use App\Events\HumanQuestionAnswered;
 use App\Events\ResearchCompleted;
 use App\Events\ResearchFailed;
+use App\Infrastructure\Research\Llm\HealthTrackingLlmClient;
 use App\Infrastructure\Research\Llm\OpenAiCompatibleClient;
 use App\Infrastructure\Research\Persistence\EloquentHumanQuestionRepository;
 use App\Infrastructure\Research\Persistence\EloquentMemoryRepository;
@@ -131,7 +133,16 @@ class ResearchServiceProvider extends ServiceProvider
         // EVERY model call goes through the self-hosted LiteLLM gateway (local
         // Ollama + cloud, behind one OpenAI-compatible endpoint). There is no
         // longer a per-provider driver in the app — the gateway does the routing.
-        $this->app->bind(LlmClient::class, OpenAiCompatibleClient::class);
+        // Wrapped in HealthTrackingLlmClient so EVERY call — planner, goal
+        // comprehension, failure diagnosis, anything added later — feeds
+        // GatewayHealth with zero call-site edits. A test that does
+        // $this->app->instance(LlmClient::class, new FakeLlmClient(...)) replaces
+        // this binding outright, so it never goes near the real gateway or the
+        // health tracker.
+        $this->app->bind(LlmClient::class, fn ($app) => new HealthTrackingLlmClient(
+            $app->make(OpenAiCompatibleClient::class),
+            $app->make(GatewayHealth::class),
+        ));
         $this->app->bind(Planner::class, LlmPlanner::class);
         $this->app->bind(TraceRecorder::class, DbTraceRecorder::class);
         $this->app->bind(ResearchJobRepository::class, EloquentResearchJobRepository::class);

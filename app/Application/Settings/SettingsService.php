@@ -56,6 +56,13 @@ class SettingsService
                 ['key' => 'research.limits.max_tool_failures', 'label' => 'Max tool failures', 'type' => 'int'],
                 ['key' => 'research.limits.max_parse_failures', 'label' => 'Max invalid LLM responses', 'type' => 'int'],
             ],
+            'Gateway load control' => [
+                ['key' => 'research.gateway_load.enabled', 'label' => 'Adapt to gateway load', 'type' => 'bool', 'help' => 'Throttle new worker/reviewer spawns when the LLM gateway is slow or erroring, and allow more when it is fast (AIMD).'],
+                ['key' => 'research.gateway_load.base_concurrency', 'label' => 'Base concurrency', 'type' => 'int', 'help' => 'Sub-agents allowed in flight when the gateway\'s speed is unknown, or after a quiet period'],
+                ['key' => 'research.gateway_load.max_concurrency', 'label' => 'Max concurrency', 'type' => 'int', 'help' => 'Ceiling the budget may grow to while the gateway stays fast'],
+                ['key' => 'research.gateway_load.fast_ms', 'label' => 'Fast threshold (ms)', 'type' => 'int', 'help' => 'Average call latency at/below which the gateway is "fast" — the budget grows by 1'],
+                ['key' => 'research.gateway_load.slow_ms', 'label' => 'Slow threshold (ms)', 'type' => 'int', 'help' => 'Average call latency at/above which the gateway is "slow" — the budget is halved'],
+            ],
         ];
     }
 

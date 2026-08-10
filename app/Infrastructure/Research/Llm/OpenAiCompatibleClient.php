@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Research\Llm;
 
+use App\Application\Research\Llm\GatewayHealth;
 use App\Domain\Research\Contracts\LlmClient;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Client\PendingRequest;
@@ -21,7 +22,13 @@ use RuntimeException;
  */
 class OpenAiCompatibleClient implements LlmClient
 {
-    public function __construct(private Http $http) {}
+    /**
+     * GatewayHealth is nullable (default null) so OpenAiCompatibleClientTest's
+     * plain `app(OpenAiCompatibleClient::class)` construction keeps working
+     * unchanged — without a health tracker, adaptive retries simply never
+     * trigger and this behaves exactly as before.
+     */
+    public function __construct(private Http $http, private ?GatewayHealth $health = null) {}
 
     public function complete(string $system, array $messages, ?callable $onProgress = null): string
     {
@@ -64,9 +71,19 @@ class OpenAiCompatibleClient implements LlmClient
             }
         }
 
+        // Against an already-struggling gateway, the normal 3-attempt client
+        // retry just TRIPLES the load on the exact thing that's failing —
+        // fighting the whole point of gateway_load control. So when the
+        // gateway is strained (GatewayHealth::isStrained — slow or erroring),
+        // drop to a single attempt with a longer backoff ceiling instead of
+        // hammering it. research.gateway_load.adaptive_retries turns this off.
+        $strained = (bool) config('research.gateway_load.adaptive_retries', true) && ($this->health?->isStrained() ?? false);
+        $attempts = $strained ? 1 : 3;
+        $maxBackoffMs = $strained ? 16000 : 8000;
+
         $response = $this->request($config)
             ->timeout((int) ($config['request_timeout'] ?? 120))
-            ->retry(3, fn (int $attempt) => min(1000 * (2 ** $attempt), 8000), throw: false)
+            ->retry($attempts, fn (int $attempt) => min(1000 * (2 ** $attempt), $maxBackoffMs), throw: false)
             ->post('/chat/completions', $payload);
 
         if ($response->failed()) {
